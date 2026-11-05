@@ -53,12 +53,14 @@
         const previouslySelected = new Set(initial ? [] : selectedModules());
         const defaultInterval = intervals.find(([interval]) => available.some(([, values]) => values?.[interval] !== null && values?.[interval] !== undefined))?.[0];
         const defaultModules = new Set(available.filter(([, values]) => values?.[defaultInterval] !== null && values?.[defaultInterval] !== undefined).map(([module]) => module));
-        moduleOptions.innerHTML = available.map(([code, pricesByTerm]) => {
+        const hasPrice = value => value !== null && value !== undefined && Number.isFinite(Number(value));
+        const rows = available.map(([code, pricesByTerm]) => {
             const selected = initial ? defaultModules.has(code) : previouslySelected.has(code);
-            const detail = intervals.filter(([interval]) => pricesByTerm?.[interval] !== null && pricesByTerm?.[interval] !== undefined)
-                .map(([interval, label]) => `${formatPrice(pricesByTerm[interval], plan.currency)} / ${label.toLowerCase()}`).join(' · ');
-            return `<label><input type="checkbox" name="selected_module" value="${safeText(code)}"${selected ? ' checked' : ''}><span>${safeText(catalog.modules?.[code] || code)}<small>${detail}</small></span></label>`;
+            const cells = intervals.map(([interval]) => hasPrice(pricesByTerm?.[interval])
+                ? `<td>${formatPrice(pricesByTerm[interval], plan.currency)}</td>` : '<td class="module-na">—</td>').join('');
+            return `<tr><th scope="row"><label><input type="checkbox" name="selected_module" value="${safeText(code)}"${selected ? ' checked' : ''}><span>${safeText(catalog.modules?.[code] || code)}</span></label></th>${cells}</tr>`;
         }).join('');
+        moduleOptions.innerHTML = `<table class="module-table"><thead><tr><th scope="col">Fonctionnalité</th><th scope="col">Mois</th><th scope="col">1 an</th><th scope="col">2 ans</th></tr></thead><tbody>${rows}</tbody></table>`;
         moduleOptions.querySelectorAll('input').forEach(input => input.addEventListener('change', updateIntervals));
     }
 

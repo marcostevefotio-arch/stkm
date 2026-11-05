@@ -19,13 +19,15 @@
             <form id="signupForm" class="signup-form" novalidate>
                 <section class="signup-card">
                     <div class="signup-step-title"><span>01</span><div><h2>Choisissez votre offre</h2><p>Essayez toutes les fonctionnalités gratuitement pendant 7 jours.</p></div></div>
-                    <div class="signup-plan-control"><label for="planId">Forfait</label><select id="planId" name="plan_id" required><option value="">Chargement des offres…</option></select></div>
-                    <div class="signup-plan-options">
-                        <div class="signup-plan-control"><label for="billingInterval">Période de facturation</label><select id="billingInterval" name="billing_interval" required disabled></select></div>
-                        <div class="signup-plan-control"><label for="userLimit">Nombre d’utilisateurs</label><input id="userLimit" name="user_limit" type="number" min="1" step="1" value="1" required disabled><small id="userLimitHint"></small></div>
+                    <div class="signup-offer-fields">
+                        <div class="signup-plan-control"><label for="planId">Forfait</label><select id="planId" name="plan_id" required><option value="">Chargement des offres…</option></select></div>
+                        <div class="signup-plan-options">
+                            <div class="signup-plan-control"><label for="billingInterval">Période de facturation</label><select id="billingInterval" name="billing_interval" required disabled></select></div>
+                            <div class="signup-plan-control"><label for="userLimit">Nombre d’utilisateurs</label><input id="userLimit" name="user_limit" type="number" min="1" step="1" value="1" required disabled><small id="userLimitHint"></small></div>
+                        </div>
                     </div>
                     <fieldset id="modulePicker" class="signup-module-picker" hidden><legend>Fonctionnalités à inclure dans Customized</legend><div id="moduleOptions"></div></fieldset>
-                    <div class="signup-plan-control"><label for="promotionId">Promotion disponible</label><select id="promotionId" name="promotion_id"><option value="">Aucune promotion</option></select><small>La réduction affichée sera conservée avec votre abonnement pour la facturation manuelle.</small></div>
+                    <div class="signup-promotion signup-plan-control"><label for="promotionId">Promotion disponible</label><select id="promotionId" name="promotion_id"><option value="">Aucune promotion</option></select><small>La réduction affichée sera conservée avec votre abonnement pour la facturation manuelle.</small></div>
                 </section>
                 <section class="signup-card">
                     <div class="signup-step-title"><span>02</span><div><h2>Votre établissement</h2><p>Ces informations seront visibles dans votre espace.</p></div></div>
