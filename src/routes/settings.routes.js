@@ -4,6 +4,7 @@ const QR=require('qrcode');
 const fs=require('fs/promises');
 const path=require('path');
 const {randomUUID}=require('crypto');
+const patientCode=require('../services/patient-code.service');
 
 const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const logoDirectory=path.join(__dirname,'../../public/uploads/logos');
@@ -101,7 +102,7 @@ const logoTypes={
 r.get('/',async(req,res,next)=>{
  try{
   const [settings]=await db.execute(
-   `SELECT s.display_name,s.logo_url,s.primary_color,s.secondary_color,s.locale,s.currency,s.timezone,s.date_format,s.sales_tax_rate,s.qr_format,s.barcode_format,s.default_label_format,
+   `SELECT s.display_name,s.logo_url,s.primary_color,s.secondary_color,s.locale,s.currency,s.timezone,s.date_format,s.sales_tax_rate,s.qr_format,s.barcode_format,   s.default_label_format,s.patient_code_mode,s.patient_code_format,
     o.name company_name,o.address company_address,o.phone company_phone,o.slogan company_slogan,o.email company_email
     FROM organizations o LEFT JOIN organization_settings s ON s.organization_id=o.id WHERE o.id=?`,
    [req.tenantId]
@@ -301,9 +302,15 @@ r.post('/logo',async(req,res,next)=>{
 r.put('/',async(req,res,next)=>{
  try{
   if(!isAdministrator(req))return res.status(403).json({error:'Seuls les propriétaires et administrateurs peuvent modifier les paramètres.'});
-  const allowed=['display_name','primary_color','secondary_color','locale','currency','timezone','date_format','sales_tax_rate','qr_format','barcode_format','default_label_format'];
+  const allowed=['display_name','primary_color','secondary_color','locale','currency','timezone','date_format','sales_tax_rate','qr_format','barcode_format','default_label_format','patient_code_mode','patient_code_format'];
   const d=Object.fromEntries(Object.entries(req.body||{}).filter(([key])=>allowed.includes(key)));
   if(Object.hasOwn(d,'default_label_format')&&!['barcode','qr'].includes(d.default_label_format))return res.status(400).json({error:'Le format d’étiquette par défaut doit être code-barres ou QR.'});
+  if(Object.hasOwn(d,'patient_code_mode')&&!patientCode.MODES.has(d.patient_code_mode))return res.status(400).json({error:'Le mode de saisie du code patient est invalide.'});
+  if(Object.hasOwn(d,'patient_code_format')){
+   d.patient_code_format=typeof d.patient_code_format==='string'?d.patient_code_format.trim():d.patient_code_format;
+   const formatError=patientCode.validateFormat(d.patient_code_format);
+   if(formatError)return res.status(400).json({error:formatError});
+  }
   if(Object.prototype.hasOwnProperty.call(d,'sales_tax_rate')){
    const raw=d.sales_tax_rate,rate=Number(raw);
    if((typeof raw!=='number'&&typeof raw!=='string')||(typeof raw==='string'&&!raw.trim())||!Number.isFinite(rate)||rate<0||rate>100||Math.abs(rate*100-Math.round(rate*100))>1e-7)return res.status(400).json({error:'Le taux de taxe doit être compris entre 0 et 100 %, avec deux décimales maximum.'});

@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS organization_settings (
  sales_tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
  qr_format VARCHAR(30) NOT NULL DEFAULT 'QR', barcode_format VARCHAR(30) NOT NULL DEFAULT 'CODE128',
  default_label_format VARCHAR(20) NOT NULL DEFAULT 'barcode',
+ patient_code_mode ENUM('auto','manual') NOT NULL DEFAULT 'manual',
+ patient_code_format VARCHAR(60) NOT NULL DEFAULT 'PAT-{SEQ:5}',
+ patient_code_sequence BIGINT UNSIGNED NOT NULL DEFAULT 0,
  FOREIGN KEY(organization_id) REFERENCES organizations(id)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS notifications (
@@ -129,6 +132,19 @@ CREATE TABLE IF NOT EXISTS stock_movements (
  KEY idx_moves_tenant_date(organization_id,created_at),
  FOREIGN KEY(organization_id) REFERENCES organizations(id), FOREIGN KEY(product_id) REFERENCES products(id),
  FOREIGN KEY(user_id) REFERENCES users(id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS stock_movement_corrections (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, organization_id BIGINT UNSIGNED NOT NULL,
+ movement_id BIGINT UNSIGNED NOT NULL, requested_by BIGINT UNSIGNED NOT NULL,
+ old_quantity DECIMAL(14,3) NOT NULL, old_reference VARCHAR(120), old_notes TEXT,
+ new_quantity DECIMAL(14,3) NOT NULL, new_reference VARCHAR(120), new_notes TEXT,
+ reason VARCHAR(500) NOT NULL,
+ status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+ validated_by BIGINT UNSIGNED NULL, validated_at TIMESTAMP NULL, decision_note VARCHAR(500) NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ KEY idx_corrections_movement(movement_id,status), KEY idx_corrections_tenant_status(organization_id,status),
+ FOREIGN KEY(organization_id) REFERENCES organizations(id), FOREIGN KEY(movement_id) REFERENCES stock_movements(id),
+ FOREIGN KEY(requested_by) REFERENCES users(id), FOREIGN KEY(validated_by) REFERENCES users(id)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS suppliers (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, organization_id BIGINT UNSIGNED NOT NULL,

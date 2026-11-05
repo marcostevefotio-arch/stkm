@@ -7,3 +7,5 @@
 .password-toggle{position:absolute;top:50%;right:6px;transform:translateY(-50%);width:auto!important;margin:0;padding:6px 9px;border:0;border-radius:5px;background:transparent;color:#145c4b;font:700 11px 'Lato',Poppins,sans-serif;cursor:pointer}
 .password-toggle:hover{background:#eaf4ef}
 .password-toggle:focus-visible{outline:2px solid #145c4b}
+
+.settings-tabs{scrollbar-width:none}.settings-tabs:hover{scrollbar-width:thin}.settings-tabs::-webkit-scrollbar{height:0}.settings-tabs:hover::-webkit-scrollbar{height:6px}.settings-tabs::-webkit-scrollbar-thumb{background:#c5d0ca;border-radius:6px}

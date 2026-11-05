@@ -48,6 +48,9 @@
             state.role = role; state.userId = Number(me.user.id);
             state.modules = parseModuleList(me.user.subscription_modules);
             state.canAdminister = ['OWNER', 'ADMIN'].includes(role);
+            state.profile = me.user;
+            document.querySelectorAll('[data-admin-only]').forEach(item => { item.hidden = !['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(role); });
+            loadAlerts();
             state.canSendNotifications = state.canAdminister;
             state.canAccessPatientRecords = ['OWNER', 'ADMIN', 'PHARMACIST'].includes(role);
             state.canOperateSales = ['OWNER', 'ADMIN', 'PHARMACIST', 'CASHIER'].includes(role);
@@ -98,7 +101,7 @@
         const controls = document.createElement('div'); controls.className = 'table-controls'; controls.append(search);
         filters.forEach((filter, index) => { const select = document.createElement('select'); select.setAttribute('aria-label', filter.label); select.innerHTML = `<option value="">${esc(filter.label)} : Tous</option>${filter.options.map(option => `<option value="${esc(option.value)}">${esc(option.label)}</option>`).join('')}`; select.addEventListener('change', () => { filterValues[index] = select.value; page = 0; render(); }); controls.append(select); });
         const pageSizeSelect = document.createElement('select'); pageSizeSelect.setAttribute('aria-label', 'Lignes par page'); pageSizeSelect.innerHTML = '<option value="10">10 lignes</option><option value="25">25 lignes</option><option value="50">50 lignes</option>'; pageSizeSelect.value = String(pageSize); pageSizeSelect.addEventListener('change', () => { pageSize = Number(pageSizeSelect.value); page = 0; render(); }); controls.append(pageSizeSelect);
-        const wrap = document.createElement('div'); wrap.className = 'tablewrap'; const table = document.createElement('table'); const head = document.createElement('thead'), body = document.createElement('tbody'); const headerRow = document.createElement('tr');
+        const wrap = document.createElement('div'); wrap.className = 'tablewrap'; const table = document.createElement('table'); table.className = 'responsive-table'; const head = document.createElement('thead'), body = document.createElement('tbody'); const headerRow = document.createElement('tr');
         columns.forEach((column, index) => { const th = document.createElement('th'); if (column.sortValue) { const button = document.createElement('button'); button.type = 'button'; button.className = 'table-sort'; button.textContent = column.label; button.addEventListener('click', () => { if (sortIndex === index) sortDirection *= -1; else { sortIndex = index; sortDirection = 1; } render(); }); th.append(button); } else th.textContent = column.label; headerRow.append(th); });
         head.append(headerRow); table.append(head, body); wrap.append(table);
         const footer = document.createElement('div'); footer.className = 'table-footer'; const status = document.createElement('span'), previous = document.createElement('button'), next = document.createElement('button'); previous.type = next.type = 'button'; previous.className = next.className = 'table-page'; previous.textContent = 'Précédent'; next.textContent = 'Suivant'; previous.addEventListener('click', () => { page = Math.max(0, page - 1); render(); }); next.addEventListener('click', () => { page += 1; render(); }); footer.append(status, previous, next);
@@ -108,17 +111,20 @@
             if (columns[sortIndex]?.sortValue) filtered.sort((a, b) => { const left = columns[sortIndex].sortValue(a), right = columns[sortIndex].sortValue(b); return (typeof left === 'number' && typeof right === 'number' ? left - right : String(left).localeCompare(String(right), 'fr', { numeric: true, sensitivity: 'base' })) * sortDirection; });
             const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize)); page = Math.min(page, pageCount - 1);
             const visible = filtered.slice(page * pageSize, (page + 1) * pageSize);
-            body.innerHTML = visible.length ? visible.map(row => `<tr>${columns.map(column => `<td>${column.render(row)}</td>`).join('')}</tr>`).join('') : `<tr><td class="table-empty" colspan="${columns.length}">${esc(emptyMessage)}</td></tr>`;
+            body.innerHTML = visible.length ? visible.map(row => `<tr>${columns.map(column => `<td data-label="${esc(column.label)}"><div class="cell-content">${column.render(row)}</div></td>`).join('')}</tr>`).join('') : `<tr><td class="table-empty" colspan="${columns.length}">${esc(emptyMessage)}</td></tr>`;
             status.textContent = filtered.length ? `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, filtered.length)} sur ${filtered.length}` : emptyMessage;
             previous.disabled = page === 0; next.disabled = (page + 1) * pageSize >= filtered.length;
         }
         render();
     }
     function closeOpenModals() {
-        document.querySelectorAll('.overlay').forEach(overlay => {
-            overlay.querySelector('.close')?.click();
-            overlay.remove();
-        });
+        state.closingModals = true;
+        try {
+            document.querySelectorAll('.overlay').forEach(overlay => {
+                overlay.querySelector('.close')?.click();
+                overlay.remove();
+            });
+        } finally { state.closingModals = false; }
     }
     function go(page, query = '') {
         closeOpenModals();
@@ -138,7 +144,7 @@
             document.querySelectorAll('[data-page]').forEach(link => { link.classList.remove('active'); link.removeAttribute('aria-current'); });
             $('#title').textContent = 'Recherche générale'; $('#global-search-input').value = searchTerm; location.hash = searchTerm ? `global-search?q=${encodeURIComponent(searchTerm)}` : 'global-search'; searchPage($('#content'), searchTerm); return;
         }
-        const settingsTabs = ['settings', 'tax', 'backup', 'security', 'codes', 'search'];
+        const settingsTabs = ['settings', 'tax', 'patients', 'backup', 'security', 'codes', 'search'];
         if (settingsTabs.includes(page)) { const activeTab = page === 'settings' ? 'general' : page; document.querySelectorAll('[data-page]').forEach(a => { const active = a.dataset.page === 'settings'; a.classList.toggle('active', active); if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }); $('#title').textContent = 'Paramètres'; location.hash = page === 'settings' ? 'settings' : `settings/${page}`; settings($('#content'), activeTab); return; }
         if (page === 'insurers' || page.startsWith('insurers/')) {
             const activeTab = page === 'insurers/coverages' ? 'coverages' : 'organizations';
@@ -906,19 +912,42 @@
                     { label: 'Genre', sortValue: patient => patientGenders[patient.gender] || patientGenders.UNSPECIFIED, render: patient => esc(patientGenders[patient.gender] || patientGenders.UNSPECIFIED) },
                     { label: 'Coordonnées', sortValue: patient => patient.phone || patient.email || '', render: patient => `${esc(patient.phone || '—')}<small>${esc(patient.email || '')}</small>` },
                     { label: 'Statut', sortValue: patient => patient.is_active ? 'Actif' : 'Archivé', render: patient => `<span class="tag">${patient.is_active ? 'Actif' : 'Archivé'}</span>` },
-                    { label: 'Actions', render: patient => `${state.canAccessPatientRecords ? `<button class="table-action" type="button" data-medical-history="${esc(patient.id)}">Antécédents</button>` : ''}${patient.is_active ? `<button class="table-action" type="button" data-edit-patient="${esc(patient.id)}">Modifier</button><button class="table-action danger" type="button" data-archive-patient="${esc(patient.id)}">Archiver</button>` : `<button class="table-action" type="button" data-restore-patient="${esc(patient.id)}">Réactiver</button>`}` }
+                    { label: 'Actions', render: patient => `<button class="table-action" type="button" data-view-patient="${esc(patient.id)}">Consulter</button>${state.canAccessPatientRecords ? `<button class="table-action" type="button" data-medical-history="${esc(patient.id)}">Antécédents</button>` : ''}${patient.is_active ? `<button class="table-action" type="button" data-edit-patient="${esc(patient.id)}">Modifier</button><button class="table-action danger" type="button" data-archive-patient="${esc(patient.id)}">Archiver</button>` : `<button class="table-action" type="button" data-restore-patient="${esc(patient.id)}">Réactiver</button>`}` }
                 ]
             });
             $('#add-patient').onclick = () => patientForm(root);
+            root.querySelectorAll('[data-view-patient]').forEach(button => button.onclick = () => patientRecord(root, rows.find(patient => String(patient.id) === button.dataset.viewPatient)));
             root.querySelectorAll('[data-medical-history]').forEach(button => button.onclick = () => medicalHistory(root, rows.find(patient => String(patient.id) === button.dataset.medicalHistory)));
             root.querySelectorAll('[data-edit-patient]').forEach(button => button.onclick = () => patientForm(root, rows.find(patient => String(patient.id) === button.dataset.editPatient)));
             root.querySelectorAll('[data-archive-patient]').forEach(button => button.onclick = async () => { const patient = rows.find(item => String(item.id) === button.dataset.archivePatient); if (!patient || !confirm(`Archiver le dossier de ${patient.full_name} ?`)) return; try { await api(`/api/patients/${encodeURIComponent(patient.id)}`, { method: 'DELETE' }); toast('Dossier patient archivé.'); await patients(root); } catch (error) { toast(error.message); } });
             root.querySelectorAll('[data-restore-patient]').forEach(button => button.onclick = async () => { const patient = rows.find(item => String(item.id) === button.dataset.restorePatient); if (!patient || !confirm(`Réactiver le dossier de ${patient.full_name} ?`)) return; try { await api(`/api/patients/${encodeURIComponent(patient.id)}/restore`, { method: 'POST' }); toast('Dossier patient réactivé.'); await patients(root); } catch (error) { toast(error.message); } });
         } catch (error) { root.innerHTML = `<div class="panel"><p class="error">${esc(error.message)}</p></div>`; }
     }
-    function patientForm(root, patient = null) {
+    async function patientRecord(root, patient) {
+        if (!patient) return;
+        const modal = document.createElement('div'); modal.className = 'overlay patient-record-overlay';
+        const fmt = value => value ? new Date(`${String(value).slice(0, 10)}T00:00:00`).toLocaleDateString('fr-FR') : '—';
+        const canHistory = Boolean(state.canAccessPatientRecords);
+        modal.innerHTML = `<section class="patient-record" role="dialog" aria-modal="true" aria-label="Dossier de ${esc(patient.full_name)}"><header class="patient-record-head"><div><small>${esc(patient.patient_code)}</small><h2>${esc(patient.full_name)}</h2></div><div class="patient-record-actions">${patient.is_active ? '<button class="table-action" type="button" data-record-edit>Modifier</button>' : ''}${canHistory ? '<button class="table-action" type="button" data-record-history>Gérer les antécédents</button>' : ''}<button class="btn" type="button" data-record-close>Fermer</button></div></header><div class="patient-record-body"><section class="panel"><h3>Identité & coordonnées</h3><dl class="patient-record-grid"><div><dt>Code patient</dt><dd>${esc(patient.patient_code)}</dd></div><div><dt>Nom complet</dt><dd>${esc(patient.full_name)}</dd></div><div><dt>Date de naissance</dt><dd>${esc(fmt(patient.birth_date))}</dd></div><div><dt>Genre</dt><dd>${esc(patientGenders[patient.gender] || patientGenders.UNSPECIFIED)}</dd></div><div><dt>Téléphone</dt><dd>${esc(patient.phone || '—')}</dd></div><div><dt>Courriel</dt><dd>${esc(patient.email || '—')}</dd></div><div><dt>Adresse</dt><dd>${esc(patient.address || '—')}</dd></div><div><dt>Statut</dt><dd>${patient.is_active ? 'Actif' : 'Archivé'}</dd></div></dl></section>${canHistory ? '<section class="panel"><h3>Antécédents</h3><div data-record-history-list><p class="notification-empty">Chargement…</p></div></section>' : ''}</div></section>`;
+        document.body.append(modal);
+        const close = () => modal.remove(); modal.querySelector('[data-record-close]').onclick = close;
+        modal.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
+        modal.querySelector('[data-record-edit]')?.addEventListener('click', () => { close(); patientForm(root, patient); });
+        modal.querySelector('[data-record-history]')?.addEventListener('click', () => { close(); medicalHistory(root, patient); });
+        modal.querySelector('[data-record-close]').focus();
+        if (!canHistory) return;
+        const list = modal.querySelector('[data-record-history-list]');
+        try {
+            const records = await api(`/api/patients/${encodeURIComponent(patient.id)}/medical-history`);
+            list.innerHTML = records.length ? records.map(record => `<article class="medical-history-item${record.review_flag ? ' needs-review' : ''}"><h4>${esc(record.condition_name)}${record.condition_code ? ` <small>· ${esc(record.condition_code)}</small>` : ''}</h4><small>${esc(fmt(record.start_date))} – ${esc(fmt(record.end_date))} · ${esc(historyStatuses[record.status] || record.status)}</small>${record.notes ? `<p>${esc(record.notes)}</p>` : ''}</article>`).join('') : '<p class="notification-empty">Aucun antécédent enregistré.</p>';
+        } catch (error) { if (list.isConnected) list.innerHTML = `<p class="error">${esc(error.message)}</p>`; }
+    }
+    async function patientForm(root, patient = null) {
         const editing = Boolean(patient), modal = document.createElement('div'); modal.className = 'overlay';
-        modal.innerHTML = `<form class="modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>${editing ? 'Modifier le dossier' : 'Nouveau patient'}</h3><label>Code patient<input name="patient_code" maxlength="80" required value="${esc(patient?.patient_code || '')}"></label><label>Nom complet<input name="full_name" maxlength="190" required value="${esc(patient?.full_name || '')}"></label><div class="two"><label>Date de naissance<input name="birth_date" type="date" value="${esc(patient?.birth_date ? String(patient.birth_date).slice(0, 10) : '')}"></label><label>Genre<select name="gender">${Object.entries(patientGenders).map(([value, label]) => `<option value="${value}" ${patient?.gender === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div><div class="two"><label>Téléphone<input name="phone" maxlength="50" value="${esc(patient?.phone || '')}"></label><label>Courriel<input name="email" type="email" maxlength="190" value="${esc(patient?.email || '')}"></label></div><label>Adresse<textarea name="address" rows="2">${esc(patient?.address || '')}</textarea></label><p class="notification-empty">Les antécédents disposent d’un accès séparé réservé aux rôles autorisés.</p><button class="btn">${editing ? 'Enregistrer les modifications' : 'Créer le dossier'}</button><p class="error" role="alert"></p></form>`;
+        let autoCode = false;
+        if (!editing) { try { autoCode = (await api('/api/settings')).patient_code_mode === 'auto'; } catch { autoCode = false; } }
+        const codeField = autoCode ? '<label>Code patient<input value="" placeholder="Généré automatiquement" disabled></label>' : `<label>Code patient<input name="patient_code" maxlength="80" required value="${esc(patient?.patient_code || '')}"></label>`;
+        modal.innerHTML = `<form class="modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>${editing ? 'Modifier le dossier' : 'Nouveau patient'}</h3>${codeField}<label>Nom complet<input name="full_name" maxlength="190" required value="${esc(patient?.full_name || '')}"></label><div class="two"><label>Date de naissance<input name="birth_date" type="date" value="${esc(patient?.birth_date ? String(patient.birth_date).slice(0, 10) : '')}"></label><label>Genre<select name="gender">${Object.entries(patientGenders).map(([value, label]) => `<option value="${value}" ${patient?.gender === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div><div class="two"><label>Téléphone<input name="phone" maxlength="50" value="${esc(patient?.phone || '')}"></label><label>Courriel<input name="email" type="email" maxlength="190" value="${esc(patient?.email || '')}"></label></div><label>Adresse<textarea name="address" rows="2">${esc(patient?.address || '')}</textarea></label><p class="notification-empty">Les antécédents disposent d’un accès séparé réservé aux rôles autorisés.</p><button class="btn">${editing ? 'Enregistrer les modifications' : 'Créer le dossier'}</button><p class="error" role="alert"></p></form>`;
         document.body.append(modal); const form = modal.querySelector('form'); modal.querySelector('.close').onclick = () => modal.remove(); modal.addEventListener('click', event => { if (event.target === modal) modal.remove(); });
         form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; try { await api(editing ? `/api/patients/${encodeURIComponent(patient.id)}` : '/api/patients', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); modal.remove(); toast(editing ? 'Dossier modifié.' : 'Dossier patient créé.'); await patients(root); } catch (reason) { error.textContent = reason.message; } };
     }
@@ -934,19 +963,20 @@
             render(rows);
             const refresh = async () => { rows = await api(`/api/patients/${encodeURIComponent(patient.id)}/medical-history`); render(rows); return rows; };
             const close = () => modal.remove(); modal.querySelector('.close').onclick = close; modal.addEventListener('click', event => { if (event.target === modal) close(); });
-            modal.querySelector('[data-add-history]').onclick = () => medicalHistoryForm(patient, null, async () => refresh());
+            const reopen = () => medicalHistory(root, patient);
+            modal.querySelector('[data-add-history]').onclick = () => { modal.remove(); medicalHistoryForm(patient, null, reopen, reopen); };
             list.addEventListener('click', async event => {
                 const edit = event.target.closest('[data-edit-history]');
-                if (edit) { const records = await refresh(); medicalHistoryForm(patient, records.find(record => String(record.id) === edit.dataset.editHistory), async () => refresh()); return; }
+                if (edit) { const records = await refresh(); modal.remove(); medicalHistoryForm(patient, records.find(record => String(record.id) === edit.dataset.editHistory), reopen, reopen); return; }
                 const archive = event.target.closest('[data-archive-history]');
                 if (archive) { const record = rows.find(item => String(item.id) === archive.dataset.archiveHistory); if (!record || !confirm(`Archiver l’antécédent « ${record.condition_name} » ?`)) return; try { await api(`/api/patients/${encodeURIComponent(patient.id)}/medical-history/${encodeURIComponent(record.id)}`, { method: 'DELETE' }); toast('Antécédent archivé.'); await refresh(); } catch (error) { toast(error.message); } }
             });
         } catch (error) { toast(error.message); }
     }
-    function medicalHistoryForm(patient, record, onSaved) {
+    function medicalHistoryForm(patient, record, onSaved, onCancel) {
         const editing = Boolean(record), modal = document.createElement('div'); modal.className = 'overlay medical-history-form-overlay';
         modal.innerHTML = `<form class="modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>${editing ? 'Modifier l’antécédent' : 'Nouvel antécédent'}</h3><label>Affection ou libellé documenté<input name="condition_name" maxlength="190" required value="${esc(record?.condition_name || '')}"></label><label>Code clinique (facultatif)<input name="condition_code" maxlength="80" value="${esc(record?.condition_code || '')}"></label><div class="two"><label>Date de début<input name="start_date" type="date" value="${esc(record?.start_date ? String(record.start_date).slice(0, 10) : '')}"></label><label>Date de fin<input name="end_date" type="date" value="${esc(record?.end_date ? String(record.end_date).slice(0, 10) : '')}"></label></div><label>Statut<select name="status">${Object.entries(historyStatuses).map(([value, label]) => `<option value="${value}" ${record?.status === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Notes de suivi<textarea name="notes" rows="3">${esc(record?.notes || '')}</textarea></label><p class="notification-empty">Toute correspondance est un signal à vérifier par un professionnel, pas un diagnostic automatisé.</p><button class="btn">${editing ? 'Enregistrer' : 'Ajouter l’antécédent'}</button><p class="error" role="alert"></p></form>`;
-        document.body.append(modal); const form = modal.querySelector('form'); modal.querySelector('.close').onclick = () => modal.remove(); modal.addEventListener('click', event => { if (event.target === modal) modal.remove(); });
+        document.body.append(modal); const form = modal.querySelector('form'); const cancel = () => { modal.remove(); if (!state.closingModals && onCancel) onCancel(); }; modal.querySelector('.close').onclick = cancel; modal.addEventListener('click', event => { if (event.target === modal) cancel(); });
         form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; try { const result = await api(editing ? `/api/patients/${encodeURIComponent(patient.id)}/medical-history/${encodeURIComponent(record.id)}` : `/api/patients/${encodeURIComponent(patient.id)}/medical-history`, { method: editing ? 'PUT' : 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); modal.remove(); if (result.review_flag) toast(result.review_flag === 'possible_recurrence' ? 'Correspondance avec un antécédent résolu : vérification professionnelle requise.' : 'Libellé déjà présent : vérifiez le dossier.'); else toast(editing ? 'Antécédent modifié.' : 'Antécédent enregistré.'); await onSaved(); } catch (reason) { error.textContent = reason.message; } };
     }
     const coverageStatusLabel = coverage => coverage.status === 'inactive' ? 'Archivée' : coverage.end_date && String(coverage.end_date).slice(0, 10) < new Date().toISOString().slice(0, 10) ? 'Expirée' : 'Active';
@@ -1177,18 +1207,33 @@
     }
     async function movements(root) {
         try {
-            const [rows, productsList] = await Promise.all([api('/api/stock/movements'), api('/api/products')]); state.products = productsList; root.innerHTML = `<div class="panel"><div class="panel-head"><div><h3>Journal des mouvements</h3><p>Entrées, sorties et ajustements · journal non modifiable pour préserver la traçabilité.</p></div><button class="btn" id="new" ${productsList.length ? '' : 'disabled'}>＋ Nouveau mouvement</button></div><div data-movements-table></div></div>`;
+            const [rows, productsList] = await Promise.all([api('/api/stock/movements'), api('/api/products')]); state.products = productsList; root.innerHTML = `<div class="panel"><div class="panel-head"><div><h3>Journal des mouvements</h3><p>Entrées, sorties et ajustements · toute correction passe par une validation et reste tracée (mention « Modifié »).</p></div><button class="btn" id="new" ${productsList.length ? '' : 'disabled'}>＋ Nouveau mouvement</button></div><div data-movements-table></div></div>`;
             mountDataTable(root.querySelector('[data-movements-table]'), {
                 rows: rows.map(movement => ({ ...movement, searchText: [movement.product_name, movement.sku, movement.movement_type, movement.reference, movement.notes].join(' ') })), searchText: 'Rechercher par produit, SKU, type, référence ou note…', filters: [{ label: 'Type', options: [{ value: 'IN', label: 'Entrée' }, { value: 'OUT', label: 'Sortie' }, { value: 'ADJUSTMENT', label: 'Ajustement' }], value: movement => movement.movement_type }], columns: [
                     { label: 'Date', sortValue: movement => new Date(movement.created_at).getTime(), render: movement => esc(new Date(movement.created_at).toLocaleString('fr-FR')) },
                     { label: 'Produit', sortValue: movement => movement.product_name, render: movement => `<b>${esc(movement.product_name)}</b><small>${esc(movement.sku)}</small>` },
                     { label: 'Type', sortValue: movement => movement.movement_type, render: movement => esc({ IN: 'Entrée', OUT: 'Sortie', ADJUSTMENT: 'Ajustement' }[movement.movement_type] || movement.movement_type) },
                     { label: 'Quantité', sortValue: movement => Number(movement.quantity), render: movement => esc(movement.quantity) },
-                    { label: 'Référence / note', sortValue: movement => movement.reference || '', render: movement => `${esc(movement.reference || '—')}${movement.notes ? `<small>${esc(movement.notes)}</small>` : ''}` }
+                    { label: 'Référence / note', sortValue: movement => movement.reference || '', render: movement => `${esc(movement.reference || '—')}${movement.notes ? `<small>${esc(movement.notes)}</small>` : ''}` },
+                    { label: 'Modification', render: movement => `${movement.correction_id ? `<span class="tag">Modifié</span><small>Par ${esc(movement.modified_by_name || '—')} · validé par ${esc(movement.validated_by_name || '—')}</small><small>${esc(movement.corrected_at ? new Date(movement.corrected_at).toLocaleString('fr-FR') : '')} · avant : ${esc(movement.corrected_from)}${movement.correction_reason ? ` · ${esc(movement.correction_reason)}` : ''}</small>` : ''}${movement.pending_id ? `<span class="tag">En attente de validation</span><small>Demandé par ${esc(movement.pending_by_name || '—')} : quantité ${esc(movement.pending_quantity)} · ${esc(movement.pending_reason)}</small>` : ''}` },
+                    { label: 'Actions', render: movement => movement.pending_id ? (state.canAdminister || state.role === 'SUPER_ADMIN' ? `${Number(movement.pending_by_id) !== state.userId || state.role === 'SUPER_ADMIN' ? `<button class="table-action" type="button" data-approve-correction="${esc(movement.pending_id)}">Valider</button>` : ''}<button class="table-action danger" type="button" data-reject-correction="${esc(movement.pending_id)}">Rejeter</button>` : '') : (movement.correctable && ['OWNER', 'ADMIN', 'STOREKEEPER', 'SUPER_ADMIN'].includes(state.role) ? `<button class="table-action" type="button" data-correct-movement="${esc(movement.id)}">Corriger</button>` : '') }
                 ]
             });
             if (productsList.length) $('#new').onclick = () => movementForm(root);
+            root.onclick = async event => {
+                const correct = event.target.closest('[data-correct-movement]'), approve = event.target.closest('[data-approve-correction]'), reject = event.target.closest('[data-reject-correction]');
+                if (correct) { movementCorrectionForm(root, rows.find(movement => String(movement.id) === correct.dataset.correctMovement)); return; }
+                if (approve) { if (!confirm('Valider et appliquer cette correction ? Le stock sera ajusté en conséquence.')) return; try { await api(`/api/stock/corrections/${encodeURIComponent(approve.dataset.approveCorrection)}/approve`, { method: 'POST', body: '{}' }); toast('Correction validée.'); await movements(root); } catch (reason) { toast(reason.message); } return; }
+                if (reject) { const note = prompt('Motif du rejet (facultatif) :'); if (note === null) return; try { await api(`/api/stock/corrections/${encodeURIComponent(reject.dataset.rejectCorrection)}/reject`, { method: 'POST', body: JSON.stringify({ note }) }); toast('Correction rejetée.'); await movements(root); } catch (reason) { toast(reason.message); } }
+            };
         } catch (error) { root.innerHTML = `<div class="panel"><p class="error">${esc(error.message)}</p></div>`; }
+    }
+    function movementCorrectionForm(root, movement) {
+        if (!movement) return;
+        const modal = document.createElement('div'), adjustment = movement.movement_type === 'ADJUSTMENT'; modal.className = 'overlay';
+        modal.innerHTML = `<form class="modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>Corriger le mouvement</h3><p class="notification-empty">${esc(movement.product_name)} (${esc(movement.sku)}). La correction sera appliquée après validation par un autre administrateur ou propriétaire, et le mouvement portera la mention « Modifié ».</p><label>Quantité<input name="quantity" type="number" min="0.001" step="0.001" required value="${esc(movement.quantity)}" ${adjustment ? 'readonly' : ''}></label><label>Référence<input name="reference" maxlength="120" value="${esc(movement.reference || '')}"></label><label>Note<textarea name="notes" rows="3">${esc(movement.notes || '')}</textarea></label><label>Motif de la correction<textarea name="reason" rows="2" maxlength="500" required></textarea></label><button class="btn">Soumettre pour validation</button><p class="error" role="alert"></p></form>`;
+        document.body.append(modal); const form = modal.querySelector('form'); modal.querySelector('.close').onclick = () => modal.remove(); modal.addEventListener('click', event => { if (event.target === modal) modal.remove(); });
+        form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; try { await api(`/api/stock/movements/${encodeURIComponent(movement.id)}/corrections`, { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); modal.remove(); toast('Correction soumise pour validation.'); await movements(root); } catch (reason) { error.textContent = reason.message; } };
     }
     function movementForm(root) { const modal = document.createElement('div'); modal.className = 'overlay'; modal.innerHTML = `<form class="modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>Nouveau mouvement</h3><label>Produit<select name="product_id" required>${state.products.map(product => `<option value="${esc(product.id)}">${esc(product.name)} (${esc(product.sku)}) — stock ${esc(product.quantity_on_hand)} ${esc(product.unit)}</option>`).join('')}</select></label><label>Type de mouvement<select name="movement_type"><option value="IN">Entrée</option><option value="OUT">Sortie</option><option value="ADJUSTMENT">Ajustement (stock final)</option></select></label><label>Quantité<input name="quantity" type="number" min="0.001" step="0.001" required><small data-quantity-help>Ajoute cette quantité au stock.</small></label><label>Référence<input name="reference" maxlength="120"></label><label>Note<textarea name="notes" rows="3"></textarea></label><button class="btn">Enregistrer le mouvement</button><p class="error" role="alert"></p></form>`; document.body.append(modal); const form = modal.querySelector('form'), type = form.elements.movement_type; modal.querySelector('.close').onclick = () => modal.remove(); modal.addEventListener('click', event => { if (event.target === modal) modal.remove(); }); type.onchange = () => { form.querySelector('[data-quantity-help]').textContent = type.value === 'ADJUSTMENT' ? 'Indique le stock final à appliquer.' : type.value === 'IN' ? 'Ajoute cette quantité au stock.' : 'Retire cette quantité du stock.'; }; form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; try { await api('/api/stock/movements', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); modal.remove(); toast('Mouvement enregistré.'); await movements(root); } catch (reason) { error.textContent = reason.message; } }; }
     async function alerts(root) {
@@ -1551,7 +1596,7 @@
         form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; const body = { movement_type: type, payment_method: form.elements.payment_method.value, amount: form.elements.amount.value, description: form.elements.description.value }; try { await api('/api/cash/movements', { method: 'POST', body: JSON.stringify(body) }); modal.remove(); toast(type === 'income' ? 'Recette enregistrée.' : 'Dépense enregistrée.'); await cashRegister(root); } catch (reason) { error.textContent = reason.message; } };
     }
     async function settings(root, activeTab = 'general') {
-        const tabs = [['general', 'Généraux & identité'], ['tax', 'Fiscalité & reçus'], ['backup', 'Sauvegarde & restauration'], ['security', 'Sécurité & mot de passe'], ['codes', 'QR & codes-barres'], ['search', 'Index de recherche']];
+        const tabs = [['general', 'Généraux & identité'], ['tax', 'Fiscalité & reçus'], ['patients', 'Dossiers patients'], ['backup', 'Sauvegarde & restauration'], ['security', 'Sécurité & mot de passe'], ['codes', 'QR & codes-barres'], ['search', 'Index de recherche']];
         if (!tabs.some(([id]) => id === activeTab)) activeTab = 'general';
         if (!state.canAdminister && activeTab !== 'security') { root.innerHTML = '<div class="panel"><h3>Accès réservé</h3><p class="error" role="alert">Les paramètres de l’établissement sont réservés aux propriétaires et administrateurs.</p></div>'; return; }
         root.innerHTML = `<div class="settings-page"><div class="settings-tabs" role="tablist" aria-label="Sections des paramètres">${tabs.map(([id, label]) => `<button type="button" class="settings-tab${activeTab === id ? ' active' : ''}" role="tab" aria-selected="${activeTab === id}" data-settings-tab="${id}">${label}</button>`).join('')}</div><div id="settings-panel" role="tabpanel"></div></div>`;
@@ -1595,6 +1640,14 @@
                     } catch (reason) { error.textContent = reason.message; }
                 };
                 $('#settings').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget, d = Object.fromEntries(new FormData(form)), error = form.querySelector('.error'); error.textContent = ''; try { await api('/api/settings', { method: 'PUT', body: JSON.stringify(d) }); state.settings = { ...state.settings, ...d }; if (d.primary_color) document.documentElement.style.setProperty('--primary', d.primary_color); if (d.secondary_color) document.documentElement.style.setProperty('--accent', d.secondary_color); toast('Paramètres enregistrés.'); } catch (reason) { error.textContent = reason.message; } };
+            } catch (e) { if (panel.isConnected) panel.innerHTML = `<div class="panel"><p class="error">${esc(e.message)}</p></div>`; }
+            return;
+        }
+        if (activeTab === 'patients') {
+            try {
+                const s = await api('/api/settings'); if (!panel.isConnected) return;
+                panel.innerHTML = `<section class="panel settings"><small>DOSSIERS PATIENTS</small><h3>Code patient</h3><form id="patient-code-settings"><div class="two"><label>Mode de saisie<select name="patient_code_mode"><option value="manual" ${s.patient_code_mode !== 'auto' ? 'selected' : ''}>Manuel</option><option value="auto" ${s.patient_code_mode === 'auto' ? 'selected' : ''}>Automatique</option></select></label><label>Format<input name="patient_code_format" maxlength="60" required value="${esc(s.patient_code_format || 'PAT-{SEQ:5}')}"></label></div><p class="notification-empty">Variables : {YYYY} année, {YY} année sur 2 chiffres, {MM} mois, {DD} jour, {SEQ:n} compteur sur n chiffres (obligatoire, une seule fois). Exemple : PAT-{YY}-{SEQ:4} → PAT-26-0001. En mode automatique, le code est généré à la création du patient.</p><button class="btn">Enregistrer</button><p class="error" role="alert"></p></form></section>`;
+                $('#patient-code-settings').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget, d = Object.fromEntries(new FormData(form)), error = form.querySelector('.error'); error.textContent = ''; try { await api('/api/settings', { method: 'PUT', body: JSON.stringify(d) }); state.settings = { ...state.settings, ...d }; toast('Configuration du code patient enregistrée.'); } catch (reason) { error.textContent = reason.message; } };
             } catch (e) { if (panel.isConnected) panel.innerHTML = `<div class="panel"><p class="error">${esc(e.message)}</p></div>`; }
             return;
         }
@@ -1718,5 +1771,63 @@
     $('#notification-form').onsubmit = async e => { e.preventDefault(); const form = e.currentTarget, error = form.querySelector('.error'), data = Object.fromEntries(new FormData(form)); error.textContent = ''; try { await api('/api/notifications', { method: 'POST', body: JSON.stringify(data) }); form.reset(); $('#notification-recipient-field').hidden = true; form.hidden = true; toast('Notification envoyée.'); await refreshNotifications(); } catch (x) { error.textContent = x.message; } };
     $('#notification-load-more').onclick = async () => { try { await refreshNotifications(false); } catch (e) { toast(e.message); } };
     document.addEventListener('click', e => { if (!e.target.closest('.notification-wrap')) { $('#notifications-panel').hidden = true; $('#notifications-button').setAttribute('aria-expanded', 'false'); } });
-    $('#logout').onclick = () => { sessionStorage.removeItem('redams_token'); location.href = '/'; }; boot();
+    const logout = () => { sessionStorage.removeItem('redams_token'); location.href = '/'; };
+    const alertIcons = { danger: '⛔', warning: '⚠️', info: 'ℹ️' };
+    async function loadAlerts() {
+        try {
+            const data = await api('/api/alerts'), count = $('#alert-count');
+            count.textContent = data.total > 99 ? '99+' : data.total; count.hidden = !data.total;
+            $('#alerts-list').innerHTML = data.alerts.length ? data.alerts.map(item => `<button type="button" class="alert-item alert-${esc(item.severity)}" data-alert-page="${esc(item.page)}"><span aria-hidden="true">${alertIcons[item.severity] || 'ℹ️'}</span><span><b>${esc(item.title)}</b><small>${esc(item.message)}</small></span></button>`).join('') : '<p class="notification-empty">Aucune alerte pour le moment.</p>';
+        } catch (error) { $('#alerts-list').innerHTML = `<p class="notification-empty">${esc(error.message)}</p>`; }
+    }
+    const setAlertsOpen = open => { $('#alerts-panel').hidden = !open; $('#alerts-button').setAttribute('aria-expanded', String(open)); if (open) { $('#notifications-panel').hidden = true; loadAlerts(); } };
+    const setUserMenuOpen = open => { $('#user-dropdown').hidden = !open; $('#user-button').setAttribute('aria-expanded', String(open)); };
+    function infoModal(title, body) {
+        closeOpenModals();
+        const overlay = document.createElement('div'); overlay.className = 'overlay';
+        overlay.innerHTML = `<div class="modal info-modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>${esc(title)}</h3>${body}</div>`;
+        document.body.append(overlay); const close = () => overlay.remove();
+        overlay.querySelector('.close').onclick = close; overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+        return overlay;
+    }
+    const fmtDate = value => value ? new Date(value).toLocaleDateString(window.i18n?.lang === 'en' ? 'en-GB' : 'fr-FR') : '—';
+    function showProfile() {
+        const user = state.profile || {};
+        infoModal('Mon profil', `<dl class="profile-list"><dt>Nom</dt><dd>${esc(user.full_name)}</dd><dt>Courriel</dt><dd>${esc(user.email)}</dd><dt>Rôle</dt><dd>${esc(user.role)}</dd><dt>Établissement</dt><dd>${esc(user.organization_name)}</dd></dl><p class="notification-empty">Pour changer votre mot de passe, ouvrez Paramètres › Sécurité & mot de passe.</p>`);
+    }
+    async function showSubscription() {
+        const overlay = infoModal('Mon abonnement', '<p class="notification-empty">Chargement…</p>'), box = overlay.querySelector('.modal');
+        try {
+            const [sub, catalog] = await Promise.all([api('/api/subscription'), api('/api/public/catalog').catch(() => ({ plans: [] }))]);
+            if (!sub) { box.insertAdjacentHTML('beforeend', '<p>Aucun abonnement actif.</p>'); box.querySelector('.notification-empty').remove(); return; }
+            const plans = (catalog.plans || []).filter(plan => plan.name !== sub.plan_name);
+            box.innerHTML = `<button type="button" class="close" aria-label="Fermer">×</button><h3>Mon abonnement</h3><dl class="profile-list"><dt>Forfait</dt><dd>${esc(sub.plan_name)}</dd><dt>Statut</dt><dd>${esc(sub.status)}</dd><dt>Échéance</dt><dd>${esc(fmtDate(sub.current_period_end))}</dd><dt>Utilisateurs maximum</dt><dd>${esc(sub.max_users ?? '—')}</dd></dl>${plans.length ? `<h4>Changer de forfait</h4><form id="upgrade-form" class="upgrade-form"><label>Forfait souhaité<select name="plan">${plans.map(plan => `<option value="${esc(plan.name)}">${esc(plan.name)} — ${formatMoney(plan.monthly_price)}/mois</option>`).join('')}</select></label><p class="error" role="alert"></p><button class="btn">Demander un upgrade</button></form>` : ''}`;
+            box.querySelector('.close').onclick = () => overlay.remove();
+            const form = box.querySelector('#upgrade-form');
+            if (form) form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; try { await api('/api/support', { method: 'POST', body: JSON.stringify({ subject: `Demande de changement de forfait : ${form.elements.plan.value}`, message: `Je souhaite passer du forfait ${sub.plan_name} au forfait ${form.elements.plan.value}.` }) }); overlay.remove(); toast('Demande envoyée à l’assistance.'); } catch (reason) { error.textContent = reason.message; } };
+        } catch (error) { box.insertAdjacentHTML('beforeend', `<p class="error">${esc(error.message)}</p>`); }
+    }
+    async function showBilling() {
+        const overlay = infoModal('Facturation', '<p class="notification-empty">Chargement…</p>'), box = overlay.querySelector('.modal');
+        try {
+            const data = await api('/api/subscription/invoices'), rows = Array.isArray(data) ? data : data.invoices || [];
+            box.querySelector('.notification-empty').outerHTML = rows.length ? `<div class="table-scroll"><table><thead><tr><th>Facture</th><th>Période</th><th>Montant</th><th>Statut</th><th>Échéance</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.invoice_number)}</td><td>${esc(fmtDate(row.period_start))} → ${esc(fmtDate(row.period_end))}</td><td>${esc(Number(row.total_amount).toLocaleString('fr-FR'))} ${esc(row.currency || '')}</td><td>${esc(row.status)}</td><td>${esc(fmtDate(row.due_date))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="notification-empty">Aucune facture.</p>';
+        } catch (error) { box.querySelector('.notification-empty').outerHTML = `<p class="error">${esc(error.message)}</p>`; }
+    }
+    $('#alerts-button').onclick = () => setAlertsOpen($('#alerts-panel').hidden);
+    $('#alerts-close').onclick = () => setAlertsOpen(false);
+    $('#alerts-list').onclick = event => { const item = event.target.closest('[data-alert-page]'); if (!item) return; setAlertsOpen(false); go(item.dataset.alertPage); };
+    $('#user-button').onclick = () => setUserMenuOpen($('#user-dropdown').hidden);
+    $('#user-dropdown').onclick = event => {
+        const button = event.target.closest('[data-user-action]'); if (!button) return;
+        setUserMenuOpen(false);
+        ({ profile: showProfile, subscription: showSubscription, billing: showBilling, logout })[button.dataset.userAction]();
+    };
+    document.addEventListener('click', event => {
+        if (!event.target.closest('.alert-wrap')) setAlertsOpen(false);
+        if (!event.target.closest('.user-menu')) setUserMenuOpen(false);
+    });
+    $('#notifications-button').addEventListener('click', () => { if (!$('#notifications-panel').hidden) setAlertsOpen(false); });
+    setInterval(() => { if (state.role && !document.hidden) loadAlerts(); }, 60000);
+    $('#logout').onclick = logout; boot();
 })();

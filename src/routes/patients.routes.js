@@ -1,4 +1,4 @@
-const r=require('express').Router(),db=require('../config/database'),{audit}=require('../services/audit.service'),{requireRole}=require('../middleware/auth');
+const r=require('express').Router(),db=require('../config/database'),{audit}=require('../services/audit.service'),{requireRole}=require('../middleware/auth'),patientCodes=require('../services/patient-code.service');
 const genders=new Set(['F','M','OTHER','UNSPECIFIED']);
 const historyStatuses=new Set(['ongoing','resolved','in_remission']);
 const canAccessMedicalHistory=requireRole('OWNER','ADMIN','PHARMACIST');
@@ -62,16 +62,32 @@ r.post('/',canManagePatients,async(req,res,next)=>{
  try{
   const body=req.body||{};
   if((body.patient_code!==undefined&&typeof body.patient_code!=='string')||(body.full_name!==undefined&&typeof body.full_name!=='string'))return res.status(400).json({error:'Le code patient et le nom complet doivent être du texte.'});
-  const patientCode=String(body.patient_code||'').trim(),fullName=String(body.full_name||'').trim();
-  if(!patientCode||!fullName)return res.status(400).json({error:'Le code patient et le nom complet sont obligatoires.'});
-  if(patientCode.length>80||fullName.length>190)return res.status(400).json({error:'Le code ou le nom dépasse la longueur autorisée.'});
+  const manualCode=String(body.patient_code||'').trim(),fullName=String(body.full_name||'').trim();
+  if(!fullName)return res.status(400).json({error:'Le nom complet est obligatoire.'});
+  if(manualCode.length>80||fullName.length>190)return res.status(400).json({error:'Le code ou le nom dépasse la longueur autorisée.'});
   if(!genders.has(body.gender||'UNSPECIFIED'))return res.status(400).json({error:'Le genre sélectionné est invalide.'});
   if(!validDate(body.birth_date))return res.status(400).json({error:'La date de naissance est invalide.'});
   const contactError=validateContact(body);if(contactError)return res.status(400).json({error:contactError});
-  const [result]=await db.execute(
-   'INSERT INTO patients(organization_id,patient_code,full_name,birth_date,gender,phone,email,address) VALUES(?,?,?,?,?,?,?,?)',
-   [req.tenantId,patientCode,fullName,body.birth_date||null,body.gender||'UNSPECIFIED',body.phone||null,body.email||null,body.address||null]
-  );
+  const codeSettings=await patientCodes.getCodeSettings(db,req.tenantId);
+  if(codeSettings.mode==='manual'&&!manualCode)return res.status(400).json({error:'Le code patient est obligatoire.'});
+  const insertSql='INSERT INTO patients(organization_id,patient_code,full_name,birth_date,gender,phone,email,address) VALUES(?,?,?,?,?,?,?,?)';
+  const insertValues=code=>[req.tenantId,code,fullName,body.birth_date||null,body.gender||'UNSPECIFIED',body.phone||null,body.email||null,body.address||null];
+  let result;
+  if(codeSettings.mode==='auto'){
+   const connection=await db.getConnection();
+   try{
+    await connection.beginTransaction();
+    const code=await patientCodes.reserveCode(connection,req.tenantId);
+    [result]=await connection.execute(insertSql,insertValues(code));
+    await connection.commit();
+   }catch(error){
+    await connection.rollback();
+    if(error.status)return res.status(error.status).json({error:error.message});
+    throw error;
+   }finally{connection.release();}
+  }else{
+   [result]=await db.execute(insertSql,insertValues(manualCode));
+  }
   await audit({tenantId:req.tenantId,userId:req.user.id,action:'PATIENT_CREATED',entityType:'patient',entityId:result.insertId});
   res.status(201).json({id:result.insertId,message:'Patient créé.'});
  }catch(error){next(error);}
