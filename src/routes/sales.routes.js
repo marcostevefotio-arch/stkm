@@ -2,6 +2,7 @@ const router=require('express').Router();
 const db=require('../config/database');
 const {audit}=require('../services/audit.service');
 const {requireRole}=require('../middleware/auth');
+const {parseJson}=require('../config/pricing');
 const allowSales=requireRole('OWNER','ADMIN','PHARMACIST','CASHIER');
 const viewPrescription=requireRole('OWNER','ADMIN','PHARMACIST');
 const paymentMethods=new Set(['cash','mobile_money','bank_transfer','insurance','other']);
@@ -10,6 +11,10 @@ const maxPrescriptionBytes=500*1024;
 const isNumeric=value=>(typeof value==='number'&&Number.isFinite(value))||(typeof value==='string'&&value.trim()!==''&&Number.isFinite(Number(value)));
 const money=value=>Math.round((Number(value)+Number.EPSILON)*100)/100;
 const validId=value=>isNumeric(value)&&Number.isSafeInteger(Number(value))&&Number(value)>0;
+const hasPatientsModule=user=>{
+ if(user?.role==='SUPER_ADMIN'||user?.subscription_modules===null||user?.subscription_modules===undefined)return true;
+ return parseJson(user.subscription_modules,[]).includes('patients');
+};
 const validQuantity=value=>isNumeric(value)&&Number(value)>0&&Number(value)<=99999999999.999&&Math.abs(Number(value)*1000-Math.round(Number(value)*1000))<1e-7;
 const validMoney=value=>isNumeric(value)&&Number(value)>=0&&Number(value)<=999999999999&&Math.abs(Number(value)*100-Math.round(Number(value)*100))<1e-7;
 const roundLine=(quantity,price)=>money(Number(quantity)*Number(price));
@@ -126,7 +131,7 @@ async function refreshInvoiceStatus(connection,invoiceId){
 async function createSale(req,res,next){
  const body=req.body||{},validation=validateInvoiceInput(body);
  if(validation)return res.status(400).json({error:validation});
- let prescriptionImage;
+ if(!hasPatientsModule(req.user)&&(body.patient_id||body.payments?.some(payment=>payment.method==='insurance')))return res.status(403).json({error:'La vente à un patient ou par assurance n’est pas comprise dans votre forfait. Enregistrez la vente comme client externe.'});
  try{prescriptionImage=parsePrescriptionImage(body.prescription_image);}catch(error){return res.status(error.status||400).json({error:error.message});}
  let connection;
  try{
@@ -227,6 +232,7 @@ router.get('/',async(req,res,next)=>{
  }catch(error){next(error);}
 });
 router.get('/patients/:patientId/insurers',async(req,res,next)=>{
+ if(!hasPatientsModule(req.user))return res.status(403).json({error:'Cette fonctionnalité n’est pas comprise dans votre forfait.'});
  if(!validId(req.params.patientId))return res.status(400).json({error:'Patient invalide.'});
  try{
   const [rows]=await db.execute(
