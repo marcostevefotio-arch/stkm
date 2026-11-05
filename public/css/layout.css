@@ -1,3 +1,4 @@
+.overlay{z-index:15}
 .sidebar{position:fixed;inset:0 auto 0 0;height:100vh;overflow:hidden;z-index:10}
 .sidebar nav{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;-ms-overflow-style:none}
 .sidebar nav::-webkit-scrollbar{display:none}
@@ -142,8 +143,8 @@
 }
 .search-group{margin-top:12px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .search-group>summary{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:#f7faf8;color:var(--ink);font-weight:700}
-.search-group>summary:after{content:'＋';color:var(--muted)}
-.search-group[open]>summary:after{content:'−'}
+.search-group>summary:after{content:'ï¼‹';color:var(--muted)}
+.search-group[open]>summary:after{content:'âˆ’'}
 .search-group .tablewrap{padding:0 12px 10px}
 .search-group .tag{font-size:10px}
 body,button,input,select,textarea{font-family:"Lato",Poppins,sans-serif}
@@ -321,3 +322,11 @@ body,button,input,select,textarea{font-family:"Lato",Poppins,sans-serif}
 .admin-audit-details pre{max-width:380px;max-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:8px;background:#f7faf8;border-radius:5px;font:10px/1.45 Lato,sans-serif}
 @media(max-width:850px){.admin-role-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.admin-role-grid{grid-template-columns:1fr}.admin-audit-filters{grid-template-columns:1fr 1fr}.admin-audit-filters label:first-child{grid-column:1/-1}.admin-audit-filters button{width:100%}}
+.modal label small{font-weight:400;color:var(--muted);font-size:10px}
+.modal input,.modal select,.modal textarea{font-family:'Lato',Poppins,sans-serif;font-weight:400;font-size:13px}
+.modal .inline-check{margin-bottom:14px}
+.modal .inline-check input{width:16px;height:16px;padding:0;margin:0;accent-color:var(--primary)}
+.modal .notification-empty{padding:0;margin:0 0 16px}
+.required-mark{color:var(--danger,#c45b52);font-weight:700}
+.sale-customer{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}
+@media(max-width:650px){.sale-customer{grid-template-columns:1fr}}

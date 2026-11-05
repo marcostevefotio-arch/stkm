@@ -3,3 +3,4 @@
 .portal-back:hover,.signup-prompt a:hover{color:var(--primary);text-decoration:underline}
 .signup-prompt{margin:18px 0 0;text-align:center;color:var(--muted);font-size:11px}
 .signup-prompt a{color:var(--primary);font-weight:700}
+.required-mark{color:#c45b52;font-weight:700}
