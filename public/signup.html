@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="description" content="Créez l’espace de votre établissement et démarrez votre essai gratuit REDAMS-STK.">
+    <title>Créer votre espace — REDAMS-STK</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&amp;family=Montserrat:wght@400;500;600;700;800&amp;family=Poppins:wght@400;500;600;700;800&amp;display=swap"><link rel="stylesheet" href="/css/portal.css">
+    <link rel="stylesheet" href="/css/signup.css"><link rel="stylesheet" href="/css/fonts.css">
+</head>
+<body class="signup-body">
+    <header class="portal-header signup-header">
+        <a class="portal-brand" href="/" aria-label="Retour au portail REDAMS-STK"><span>R</span><strong>REDAMS<small>STK · GESTION SANTÉ</small></strong></a>
+        <div class="portal-header-actions"><span class="signup-login-note">Déjà un espace ?</span><a class="portal-login" href="/connexion">Se connecter</a></div>
+    </header>
+    <main class="signup-shell">
+        <div class="signup-heading"><a class="back-link" href="/">← Retour au portail</a><span class="portal-kicker">VOTRE ESPACE, EN QUELQUES ÉTAPES</span><h1>Créons votre <em>espace entreprise.</em></h1><p>Choisissez une offre, puis renseignez votre établissement et votre compte propriétaire.</p></div>
+        <div class="signup-layout">
+            <form id="signupForm" class="signup-form" novalidate>
+                <section class="signup-card">
+                    <div class="signup-step-title"><span>01</span><div><h2>Choisissez votre offre</h2><p>Essayez toutes les fonctionnalités gratuitement pendant 7 jours.</p></div></div>
+                    <div class="signup-plan-control"><label for="planId">Forfait</label><select id="planId" name="plan_id" required><option value="">Chargement des offres…</option></select></div>
+                    <div class="signup-plan-options">
+                        <div class="signup-plan-control"><label for="billingInterval">Période de facturation</label><select id="billingInterval" name="billing_interval" required disabled></select></div>
+                        <div class="signup-plan-control"><label for="userLimit">Nombre d’utilisateurs</label><input id="userLimit" name="user_limit" type="number" min="1" step="1" value="1" required disabled><small id="userLimitHint"></small></div>
+                    </div>
+                    <fieldset id="modulePicker" class="signup-module-picker" hidden><legend>Fonctionnalités à inclure dans Customized</legend><div id="moduleOptions"></div></fieldset>
+                    <div class="signup-plan-control"><label for="promotionId">Promotion disponible</label><select id="promotionId" name="promotion_id"><option value="">Aucune promotion</option></select><small>La réduction affichée sera conservée avec votre abonnement pour la facturation manuelle.</small></div>
+                </section>
+                <section class="signup-card">
+                    <div class="signup-step-title"><span>02</span><div><h2>Votre établissement</h2><p>Ces informations seront visibles dans votre espace.</p></div></div>
+                    <div class="signup-fields"><label>Nom de l’établissement<input name="organization_name" maxlength="180" required autocomplete="organization" placeholder="Ex. Pharmacie du Centre"></label><label>Courriel de l’établissement<input type="email" name="organization_email" maxlength="190" required autocomplete="email" placeholder="contact@entreprise.com"></label><label class="signup-wide">Adresse<input name="address" maxlength="2000" autocomplete="street-address" placeholder="Adresse de l’établissement"></label><label>Téléphone<input name="phone" maxlength="50" autocomplete="tel" placeholder="+237 …"></label><label>Slogan (facultatif)<input name="slogan" maxlength="255" placeholder="Votre signature"></label></div>
+                </section>
+                <section class="signup-card">
+                    <div class="signup-step-title"><span>03</span><div><h2>Votre compte propriétaire</h2><p>Ce compte pourra gérer les accès de votre équipe.</p></div></div>
+                    <div class="signup-fields"><label>Nom complet<input name="owner_full_name" maxlength="180" required autocomplete="name" placeholder="Votre nom"></label><label>Courriel de connexion<input type="email" name="owner_email" maxlength="190" required autocomplete="username" placeholder="vous@entreprise.com"></label><label class="signup-wide">Mot de passe<input name="password" type="password" minlength="12" maxlength="128" required autocomplete="new-password" placeholder="12 caractères minimum"><small>Utilisez un mot de passe unique et difficile à deviner.</small></label></div>
+                </section>
+                <p id="signupError" class="signup-error" role="alert" aria-live="polite"></p>
+                <label class="signup-consent"><input type="checkbox" name="accept_terms" required><span>Je confirme être autorisé à créer cet espace et avoir vérifié les informations fournies. L’essai gratuit de 7 jours, avec accès à toutes les fonctionnalités, commence après la création.</span></label>
+                <button id="signupSubmit" class="portal-button signup-submit" type="submit">Créer mon espace gratuitement <span>→</span></button>
+                <p class="signup-privacy">Aucun paiement n’est demandé à cette étape. La facturation après l’essai est gérée manuellement par l’équipe REDAMS.</p>
+            </form>
+            <aside class="signup-summary-wrap">
+                <div class="signup-summary"><span class="portal-kicker">VOTRE PANIER</span><h2>Récapitulatif</h2><div id="signupCart" class="signup-cart"><p>Chargement de votre offre…</p></div><div class="cart-totals"><div><span>À payer aujourd’hui</span><b>0</b></div><small>Aucun paiement n’est collecté à la création.</small></div><div class="trial-callout"><span>✓</span><p><b>7 jours offerts · accès complet</b><small>Toutes les fonctionnalités sont accessibles pendant l’essai.</small></p></div></div>
+                <div class="signup-help"><b>Besoin d’aide ?</b><p>Notre équipe peut vous accompagner dans le choix de l’offre et la mise en route.</p><a href="mailto:support@redams-stk.local">Contacter REDAMS →</a></div>
+            </aside>
+        </div>
+    </main>
+    <footer class="portal-footer signup-footer"><a class="portal-brand" href="/"><span>R</span><strong>REDAMS<small>STK · GESTION SANTÉ</small></strong></a><small>© <span id="currentYear"></span> REDAMS-STK</small></footer>
+    <script src="/js/signup.js" defer></script>
+</body>
+</html>

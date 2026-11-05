@@ -1,0 +1,72 @@
+.signup-body{background:#f7faf8}
+.signup-header{position:relative}
+.signup-shell{width:min(1120px,calc(100% - 40px));margin:0 auto;padding:52px 0 80px}
+.signup-heading{max-width:660px;margin:0 auto 34px;text-align:center}
+.signup-heading .back-link{display:block;width:max-content;margin:0 auto 25px;color:#66776f;font-size:12px;font-weight:700}
+.signup-heading h1{font:800 clamp(32px,4vw,44px)/1.15 Montserrat,Poppins,sans-serif;letter-spacing:-1.6px;margin:12px 0}
+.signup-heading h1 em{color:var(--green);font-style:normal}
+.signup-heading>p{color:var(--muted);font-size:13px;line-height:1.7}
+.signup-layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(270px,.8fr);align-items:start;gap:22px}
+.signup-form{display:grid;gap:15px}
+.signup-card,.signup-summary,.signup-help{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px}
+.signup-step-title{display:flex;align-items:flex-start;gap:13px;margin-bottom:21px}
+.signup-step-title>span{display:grid;place-items:center;flex:0 0 34px;height:34px;border-radius:9px;background:var(--mint);color:var(--green);font:800 11px Montserrat}
+.signup-step-title h2,.signup-summary h2{font:700 16px Montserrat;margin:0 0 5px}
+.signup-step-title p{margin:0;color:var(--muted);font-size:11px;line-height:1.6}
+.signup-plan-control{margin:0 0 16px}
+.signup-plan-control:last-child{margin-bottom:0}
+.signup-plan-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.signup-module-picker{margin:0 0 16px;padding:13px;border:1px solid var(--line);border-radius:9px}
+.signup-module-picker[hidden]{display:none}
+.signup-module-picker legend{padding:0 6px;color:#34443d;font-size:11px;font-weight:700}
+.signup-module-picker>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.signup-module-picker label{display:flex;align-items:flex-start;gap:8px;color:#34443d;font-size:10px;line-height:1.4}
+.signup-module-picker input{flex:0 0 15px;margin:1px 0;accent-color:var(--green)}
+.signup-plan-control label,.signup-fields label{display:flex;flex-direction:column;gap:7px;color:#34443d;font-size:11px;font-weight:700}
+.signup-plan-control input,.signup-plan-control select,.signup-fields input{min-height:43px;background:#fff;color:var(--ink);font:12px 'Lato',Poppins,sans-serif}
+.signup-plan-control small,.signup-fields label small{color:var(--muted);font-size:10px;font-weight:400;line-height:1.5}
+.signup-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}
+.signup-fields label{margin-bottom:14px}
+.signup-fields .signup-wide{grid-column:1/-1}
+.signup-summary-wrap{position:sticky;top:22px;display:grid;gap:13px}
+.signup-summary h2{margin:9px 0 20px}
+.signup-cart{min-height:80px}
+.signup-cart>p{font-size:11px;color:var(--muted);line-height:1.6}
+.signup-cart>p a{color:var(--green);font-weight:700}
+.cart-plan{display:flex;align-items:center;gap:11px;padding:13px 0 17px;border-bottom:1px solid var(--line)}
+.cart-icon{width:35px;height:35px;display:grid;place-items:center;border-radius:9px;background:var(--mint);color:var(--green)}
+.cart-plan b,.cart-plan small{display:block}
+.cart-plan b{font:700 13px Montserrat}
+.cart-plan small{margin-top:5px;color:var(--muted);font-size:9px}
+.cart-line{display:flex;justify-content:space-between;gap:12px;padding:11px 0;color:#6b7973;font-size:10px}
+.cart-line b{color:#293a33;font-size:10px}
+.cart-discount b{color:var(--green)}
+.cart-total{border-top:1px solid var(--line);color:#293a33;font-weight:700}
+.cart-total b{color:var(--green);text-align:right}
+.cart-quotas{display:grid;gap:7px;padding:10px 0;color:#66776f;font-size:10px}
+.cart-totals{border-top:1px solid var(--line);padding-top:15px}
+.cart-totals>div{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:700}
+.cart-totals>div b{color:var(--green);font:800 20px Montserrat}
+.cart-totals>small{display:block;margin-top:5px;color:var(--muted);font-size:9px}
+.trial-callout{display:flex;align-items:center;gap:10px;margin-top:16px;padding:12px;background:#eff7f1;border-radius:8px;color:var(--green)}
+.trial-callout>span{width:24px;height:24px;display:grid;place-items:center;border-radius:50%;background:#dcefe1;font-weight:800}
+.trial-callout p{margin:0}
+.trial-callout b,.trial-callout small{display:block}
+.trial-callout b{font-size:10px}
+.trial-callout small{margin-top:4px;color:#6f8176;font-size:9px}
+.signup-help{padding:18px 20px}
+.signup-help>b{font:700 12px Montserrat}
+.signup-help p{margin:8px 0 10px;color:var(--muted);font-size:10px;line-height:1.6}
+.signup-help a{color:var(--green);font-size:10px;font-weight:700}
+.signup-error{min-height:0;margin:0;color:#a52f27;font-size:12px;font-weight:700}
+.signup-error:not(:empty){padding:12px 14px;border:1px solid #f1cfca;border-radius:8px;background:#fff4f2}
+.signup-consent{display:flex;align-items:flex-start;gap:10px;margin:0;color:#65736d;font-size:10px;font-weight:400;line-height:1.6}
+.signup-consent input{width:16px;height:16px;flex:0 0 16px;margin:1px 0;accent-color:var(--green)}
+.signup-submit{width:100%;min-height:48px;cursor:pointer}
+.signup-submit:disabled{opacity:.6;cursor:not-allowed;transform:none}
+.signup-privacy{text-align:center;margin:0;color:var(--muted);font-size:9px;line-height:1.6}
+.signup-footer{max-width:1120px;margin:0 auto;border-top:1px solid var(--line);padding:24px 0;display:flex;align-items:center;justify-content:space-between}
+.signup-footer>small{color:var(--muted);font-size:10px}
+.signup-login-note{color:var(--muted);font-size:11px}
+@media(max-width:800px){.signup-layout{grid-template-columns:1fr}.signup-summary-wrap{position:static;grid-row:1}.signup-shell{padding-top:35px}.signup-summary{padding:20px}}
+@media(max-width:540px){.signup-shell{width:calc(100% - 24px);padding-bottom:45px}.signup-header{height:66px;padding:0 12px}.signup-header .portal-header-actions{gap:9px}.signup-login-note{display:none}.signup-header .portal-brand strong{font-size:12px}.signup-heading{margin-bottom:23px}.signup-heading .back-link{margin-bottom:18px}.signup-card{padding:18px 15px}.signup-fields{grid-template-columns:1fr}.signup-fields .signup-wide{grid-column:auto}.signup-plan-options,.signup-module-picker>div{grid-template-columns:1fr}.signup-footer{margin:0 12px}}

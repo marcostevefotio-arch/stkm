@@ -1,0 +1,26 @@
+body {
+    font-family: "Lato", sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+.brand,
+.portal-brand strong,
+.stats b,
+.price b {
+    font-family: "Montserrat", sans-serif;
+}
+
+button,
+input,
+select,
+textarea,
+.portal-nav a,
+.portal-login,
+.portal-button,
+.btn,
+.settings-tab {
+    font-family: "Poppins", sans-serif;
+}
