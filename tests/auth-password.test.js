@@ -78,18 +78,13 @@ test('authentication blocks suspended tenants and forwards database failures',as
  assert.equal(platformAdmin.status,200);
 });
 
-test('expired trial blocks tenant APIs while preserving subscription and support access',async t=>{
+test('trial expiry no longer blocks tenant APIs; module access comes from subscription_modules',async t=>{
  const originalExecute=db.execute,oldSecret=process.env.JWT_SECRET;
  process.env.JWT_SECRET='trial-expiry-test-secret';
  const token=jwt.sign({sub:9,pv:0},process.env.JWT_SECRET);
  t.after(()=>{db.execute=originalExecute;if(oldSecret===undefined)delete process.env.JWT_SECRET;else process.env.JWT_SECRET=oldSecret;});
- db.execute=async()=>[[{id:9,organization_id:42,full_name:'Trial User',email:'trial@example.com',role:'OWNER',is_active:1,password_version:0,organization_name:'Trial Org',organization_status:'active',trial_expired:1}],[]];
+ db.execute=async()=>[[{id:9,organization_id:42,full_name:'Trial User',email:'trial@example.com',role:'OWNER',is_active:1,password_version:0,organization_name:'Trial Org',organization_status:'active',subscription_modules:'["sales"]'}],[]];
  const url=await listen(t);
- const expired=await fetch(`${url.replace('/api/auth','')}/api/tenant-protected`,{headers:{Authorization:`Bearer ${token}`}});
- assert.equal(expired.status,403);
- assert.match((await expired.json()).error,/essai gratuit de 7 jours est terminé/);
- const support=await fetch(`${url.replace('/api/auth','')}/api/support/status`,{headers:{Authorization:`Bearer ${token}`}});
- assert.equal(support.status,200);
- const subscription=await fetch(`${url.replace('/api/auth','')}/api/subscription`,{headers:{Authorization:`Bearer ${token}`}});
- assert.equal(subscription.status,200);
+ const base=url.replace('/api/auth','');
+ for(const path of ['/api/tenant-protected','/api/support/status','/api/subscription'])assert.equal((await fetch(`${base}${path}`,{headers:{Authorization:'Bearer '+token}})).status,200);
 });

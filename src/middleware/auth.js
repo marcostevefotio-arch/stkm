@@ -8,12 +8,10 @@ async function authenticate(req,res,next){
  try{
   const [r]=await db.execute(
    `SELECT u.id,u.organization_id,u.full_name,u.email,u.role,u.is_active,u.password_version,
-           o.name organization_name,o.status organization_status,
-           COALESCE((SELECT s.status='trialing' AND s.current_period_end<=CURDATE()
-                     FROM subscriptions s WHERE s.organization_id=u.organization_id
-                     ORDER BY s.id DESC LIMIT 1),FALSE) trial_expired
+           o.name organization_name,o.status organization_status
            ,p.plan_type subscription_plan_type,
-           CASE WHEN p.plan_type='customized' THEN s.selected_modules ELSE p.included_modules END subscription_modules,
+           CASE WHEN s.status='trialing' AND s.current_period_end>CURDATE() THEN NULL
+                WHEN p.plan_type='customized' THEN s.selected_modules ELSE p.included_modules END subscription_modules,
            s.max_users subscription_max_users
     FROM users u JOIN organizations o ON o.id=u.organization_id
     LEFT JOIN subscriptions s ON s.id=(SELECT MAX(s2.id) FROM subscriptions s2 WHERE s2.organization_id=u.organization_id)
@@ -24,8 +22,6 @@ async function authenticate(req,res,next){
   if(!r.length||!r[0].is_active)return res.status(401).json({error:'Compte inactif.'});
   if(r[0].role!=='SUPER_ADMIN'&&r[0].organization_status&&r[0].organization_status!=='active')return res.status(403).json({error:'L’établissement est suspendu ou fermé. Contactez l’assistance REDAMS.'});
   if(Number(p.pv||0)!==Number(r[0].password_version||0))return res.status(401).json({error:'Mot de passe modifié. Reconnectez-vous.'});
-  const allowedAfterTrial=req.originalUrl.startsWith('/api/support')||req.originalUrl.startsWith('/api/subscription')||req.originalUrl==='/api/auth/me'||req.originalUrl.startsWith('/api/settings')||req.originalUrl.startsWith('/api/notifications');
-  if(r[0].role!=='SUPER_ADMIN'&&Number(r[0].trial_expired)===1&&!allowedAfterTrial)return res.status(403).json({error:'Votre essai gratuit de 7 jours est terminé. Contactez l’assistance REDAMS pour activer votre abonnement.'});
   req.user=r[0];req.tenantId=Number(r[0].organization_id);next();
  }catch(error){next(error);}
 }

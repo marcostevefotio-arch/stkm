@@ -84,3 +84,8 @@
 @media(max-width:800px){.signup-layout{grid-template-columns:1fr}.signup-summary-wrap{position:static;grid-row:1}.signup-shell{padding-top:35px}.signup-summary{padding:20px}}
 @media(max-width:540px){.signup-shell{width:calc(100% - 24px);padding-bottom:45px}.signup-header{height:66px;padding:0 12px}.signup-header .portal-header-actions{gap:9px}.signup-login-note{display:none}.signup-header .portal-brand strong{font-size:12px}.signup-heading{margin-bottom:23px}.signup-heading .back-link{margin-bottom:18px}.signup-card{padding:18px 15px}.signup-fields{grid-template-columns:1fr}.signup-fields .signup-wide{grid-column:auto}.signup-plan-options{grid-template-columns:1fr}.module-table th,.module-table td{padding:8px 6px;font-size:11px}.signup-footer{margin:0 12px}}
 .required-mark{color:#c45b52;font-weight:700}
+.password-field{position:relative;display:block;width:100%}
+.password-field>input{padding-right:84px!important}
+.password-toggle{position:absolute;top:50%;right:6px;transform:translateY(-50%);width:auto!important;margin:0;padding:6px 9px;border:0;border-radius:5px;background:transparent;color:#145c4b;font:700 11px 'Lato',Poppins,sans-serif;cursor:pointer}
+.password-toggle:hover{background:#eaf4ef}
+.password-toggle:focus-visible{outline:2px solid #145c4b}
