@@ -4,6 +4,7 @@ const {requireRole}=require('../middleware/auth');
 const bcrypt=require('bcryptjs');
 const {randomBytes}=require('crypto');
 const {ALL_MODULES,MODULE_KEYS,PRICE_COLUMNS,getPlanModules,parseJson}=require('../config/pricing');
+const {recordPaidInvoiceCommission}=require('../services/partner-commission.service');
 
 router.use(requireRole('SUPER_ADMIN'));
 
@@ -119,7 +120,7 @@ router.patch('/organizations/:id/subscription',async(req,res,next)=>{
   }else{
    const previous=subscriptions[0],nextStart=periodStart||previous.current_period_start,nextEnd=periodEnd||previous.current_period_end;
    if(Number(previous.plan_id)!==Number(planId)||previous.status!==status||String(previous.current_period_start).slice(0,10)!==String(nextStart).slice(0,10)||String(previous.current_period_end).slice(0,10)!==String(nextEnd).slice(0,10)){
-    await connection.execute('UPDATE subscriptions SET plan_id=?,status=?,current_period_start=?,current_period_end=? WHERE id=?',[planId,status,nextStart,nextEnd,previous.id]);
+    await connection.execute('UPDATE subscriptions SET plan_id=?,target_plan_id=NULL,status=?,current_period_start=?,current_period_end=? WHERE id=?',[planId,status,nextStart,nextEnd,previous.id]);
     await writePlatformAudit(connection,req,req.params.id,'PLATFORM_SUBSCRIPTION_CHANGED',previous.id,{from_plan_id:previous.plan_id,to_plan_id:planId,from_status:previous.status,to_status:status,from_period_start:previous.current_period_start,from_period_end:previous.current_period_end,to_period_start:nextStart,to_period_end:nextEnd});
    }
   }
@@ -234,18 +235,20 @@ router.patch('/pricing/:id',async(req,res,next)=>{
 
 router.get('/promotions',async(req,res,next)=>{
  try{
-  const [items]=await db.execute("SELECT id,code,name,discount_type,discount_value,DATE_FORMAT(starts_at,'%Y-%m-%d') starts_at,DATE_FORMAT(ends_at,'%Y-%m-%d') ends_at,is_active FROM platform_promotions ORDER BY created_at DESC,id DESC");
+  const [items]=await db.execute("SELECT pr.id,pr.code,pr.name,pr.plan_id,p.name plan_name,pr.discount_type,pr.discount_value,DATE_FORMAT(pr.starts_at,'%Y-%m-%d') starts_at,DATE_FORMAT(pr.ends_at,'%Y-%m-%d') ends_at,pr.new_users_only,pr.is_active FROM platform_promotions pr LEFT JOIN plans p ON p.id=pr.plan_id ORDER BY pr.created_at DESC,pr.id DESC");
   res.json(items);
  }catch(error){next(error);}
 });
 
 router.post('/promotions',async(req,res,next)=>{
- const {code,name,discount_type:type,discount_value:value,starts_at:startsAt,ends_at:endsAt,is_active:isActive}=req.body||{};
- if(typeof code!=='string'||!/^[A-Z0-9][A-Z0-9_-]{1,59}$/.test(code)||typeof name!=='string'||name.trim().length<2||name.trim().length>120||!['percent','fixed'].includes(type)||!positiveMoney(value)||Number(value)<=0||(type==='percent'&&Number(value)>100)||!validDate(startsAt)||(endsAt!=null&&endsAt!==''&&!validDate(endsAt))||(endsAt&&endsAt<startsAt)||typeof isActive!=='boolean')return res.status(400).json({error:'Vérifiez le code, le type, la valeur et les dates de la promotion.'});
+ const {code,name,discount_type:type,discount_value:value,starts_at:startsAt,ends_at:endsAt,new_users_only:newUsersOnly=false,is_active:isActive}=req.body||{};
+ const rawPlanId=req.body?.plan_id,planId=rawPlanId===undefined||rawPlanId===null||rawPlanId===''?null:String(rawPlanId);
+ if(typeof code!=='string'||!/^[A-Z0-9][A-Z0-9_-]{1,59}$/.test(code)||typeof name!=='string'||name.trim().length<2||name.trim().length>120||(planId!==null&&!validId(planId))||!['percent','fixed'].includes(type)||!positiveMoney(value)||Number(value)<=0||(type==='percent'&&Number(value)>100)||!validDate(startsAt)||(endsAt!=null&&endsAt!==''&&!validDate(endsAt))||(endsAt&&endsAt<startsAt)||typeof newUsersOnly!=='boolean'||typeof isActive!=='boolean')return res.status(400).json({error:'Vérifiez le code, le forfait, le type, la valeur et les dates de la promotion.'});
  try{
-  const details={code,name:name.trim(),discount_type:type,discount_value:value,starts_at:startsAt,ends_at:endsAt||null,is_active:isActive};
+  if(planId){const [plans]=await db.execute("SELECT id FROM plans WHERE id=? AND plan_type<>'trial'",[planId]);if(!plans.length)return res.status(400).json({error:'Le forfait ciblé est introuvable ou ne peut pas recevoir de promotion.'});}
+  const details={code,name:name.trim(),plan_id:planId,discount_type:type,discount_value:value,starts_at:startsAt,ends_at:endsAt||null,new_users_only:newUsersOnly,is_active:isActive};
   const id=await auditedMutation(req,req.tenantId,'PLATFORM_PROMOTION_CREATED','platform_promotion',details,async connection=>{
-   const [result]=await connection.execute('INSERT INTO platform_promotions(code,name,discount_type,discount_value,starts_at,ends_at,is_active) VALUES(?,?,?,?,?,?,?)',[code,name.trim(),type,value,startsAt,endsAt||null,isActive]);
+   const [result]=await connection.execute('INSERT INTO platform_promotions(code,name,plan_id,discount_type,discount_value,starts_at,ends_at,new_users_only,is_active) VALUES(?,?,?,?,?,?,?,?,?)',[code,name.trim(),planId,type,value,startsAt,endsAt||null,newUsersOnly,isActive]);
    return result.insertId;
   });
   res.status(201).json({id,message:'Promotion créée.'});
@@ -254,14 +257,18 @@ router.post('/promotions',async(req,res,next)=>{
 
 router.patch('/promotions/:id',async(req,res,next)=>{
  if(!validId(req.params.id))return res.status(400).json({error:'Identifiant de promotion invalide.'});
- const {name,discount_type:type,discount_value:value,starts_at:startsAt,ends_at:endsAt,is_active:isActive}=req.body||{};
- if(typeof name!=='string'||name.trim().length<2||name.trim().length>120||!['percent','fixed'].includes(type)||!positiveMoney(value)||Number(value)<=0||(type==='percent'&&Number(value)>100)||!validDate(startsAt)||(endsAt!=null&&endsAt!==''&&!validDate(endsAt))||(endsAt&&endsAt<startsAt)||typeof isActive!=='boolean')return res.status(400).json({error:'Vérifiez les données de la promotion.'});
+ const {name,discount_type:type,discount_value:value,starts_at:startsAt,ends_at:endsAt,new_users_only:newUsersOnly=false,is_active:isActive}=req.body||{};
+ const rawPlanId=req.body?.plan_id,planId=rawPlanId===undefined||rawPlanId===null||rawPlanId===''?null:String(rawPlanId);
+ if(typeof name!=='string'||name.trim().length<2||name.trim().length>120||(rawPlanId!==undefined&&planId!==null&&!validId(planId))||!['percent','fixed'].includes(type)||!positiveMoney(value)||Number(value)<=0||(type==='percent'&&Number(value)>100)||!validDate(startsAt)||(endsAt!=null&&endsAt!==''&&!validDate(endsAt))||(endsAt&&endsAt<startsAt)||typeof newUsersOnly!=='boolean'||typeof isActive!=='boolean')return res.status(400).json({error:'Vérifiez les données de la promotion.'});
  try{
-  const details={name:name.trim(),discount_type:type,discount_value:value,starts_at:startsAt,ends_at:endsAt||null,is_active:isActive};
+  if(rawPlanId!==undefined&&planId){const [plans]=await db.execute("SELECT id FROM plans WHERE id=? AND plan_type<>'trial'",[planId]);if(!plans.length)return res.status(400).json({error:'Le forfait ciblé est introuvable ou ne peut pas recevoir de promotion.'});}
+  const details={name:name.trim(),plan_id:rawPlanId===undefined?undefined:planId,discount_type:type,discount_value:value,starts_at:startsAt,ends_at:endsAt||null,new_users_only:newUsersOnly,is_active:isActive};
   const id=await auditedMutation(req,req.tenantId,'PLATFORM_PROMOTION_UPDATED','platform_promotion',details,async connection=>{
-   const [existing]=await connection.execute('SELECT id FROM platform_promotions WHERE id=? FOR UPDATE',[req.params.id]);
+   const [existing]=await connection.execute('SELECT id,plan_id FROM platform_promotions WHERE id=? FOR UPDATE',[req.params.id]);
    if(!existing.length)return null;
-   await connection.execute('UPDATE platform_promotions SET name=?,discount_type=?,discount_value=?,starts_at=?,ends_at=?,is_active=? WHERE id=?',[name.trim(),type,value,startsAt,endsAt||null,isActive,req.params.id]);
+   const nextPlanId=rawPlanId===undefined?(existing[0].plan_id===null?null:String(existing[0].plan_id)):planId;
+   details.plan_id=nextPlanId;
+   await connection.execute('UPDATE platform_promotions SET name=?,plan_id=?,discount_type=?,discount_value=?,starts_at=?,ends_at=?,new_users_only=?,is_active=? WHERE id=?',[name.trim(),nextPlanId,type,value,startsAt,endsAt||null,newUsersOnly,isActive,req.params.id]);
    return req.params.id;
   });
   if(!id)return res.status(404).json({error:'Promotion introuvable.'});
@@ -314,8 +321,13 @@ router.post('/invoices',async(req,res,next)=>{
   if(!Number.isFinite(subtotal)||subtotal<0)return res.status(400).json({error:'Le montant de l’abonnement est invalide.'});
   let promotion=null,discount=0;
   if(promotionId){
-   const [promotions]=await connection.execute('SELECT id,discount_type,discount_value FROM platform_promotions WHERE id=? AND is_active=TRUE AND starts_at<=CURDATE() AND (ends_at IS NULL OR ends_at>=CURDATE()) FOR UPDATE',[promotionId]);
+   const [promotions]=await connection.execute('SELECT id,plan_id,discount_type,discount_value,new_users_only FROM platform_promotions WHERE id=? AND is_active=TRUE AND starts_at<=CURDATE() AND (ends_at IS NULL OR ends_at>=CURDATE()) FOR UPDATE',[promotionId]);
    if(!promotions.length){await connection.rollback();connection.release();connection=null;return res.status(400).json({error:'Cette promotion est inactive ou hors période.'});}
+   if(promotions[0].plan_id!==null&&String(promotions[0].plan_id)!==String(subscription.plan_id)){await connection.rollback();connection.release();connection=null;return res.status(400).json({error:'Cette promotion ne s’applique pas au forfait de cet établissement.'});}
+   if(promotions[0].new_users_only){
+    const [[priorInvoices]]=await connection.execute('SELECT COUNT(*) total FROM platform_invoices WHERE organization_id=?',[organizationId]);
+    if(Number(priorInvoices.total)>0){await connection.rollback();connection.release();connection=null;return res.status(400).json({error:'Cette promotion est réservée aux nouveaux clients sans facture antérieure.'});}
+   }
    promotion=promotions[0];discount=promotion.discount_type==='percent'?subtotal*Number(promotion.discount_value)/100:Number(promotion.discount_value);discount=Math.min(subtotal,Math.round(discount*100)/100);
   }
   const total=Math.max(0,subtotal-discount),invoiceNumber=`RED-${Date.now()}-${randomBytes(4).toString('hex').toUpperCase()}`;
@@ -343,10 +355,13 @@ router.patch('/invoices/:id/status',async(req,res,next)=>{
   if(invoice.status==='paid'||invoice.status==='void'||(status==='paid'&&invoice.status==='draft')){await connection.rollback();connection.release();connection=null;return res.status(409).json({error:'Cette transition de statut de facture n’est pas autorisée.'});}
   if(invoice.status!==status){
    await connection.execute('UPDATE platform_invoices SET status=?,paid_at=? WHERE id=?',[status,status==='paid'?new Date():null,invoice.id]);
-   if(status==='paid')await connection.execute(
-    "INSERT INTO subscription_payments(subscription_id,amount,currency,payment_status,provider,provider_reference,paid_at) VALUES(?,?,?,'paid','manual',?,CURRENT_TIMESTAMP)",
-    [invoice.subscription_id,invoice.total_amount,invoice.currency,invoice.invoice_number]
-   );
+   if(status==='paid'){
+    await connection.execute(
+     "INSERT INTO subscription_payments(subscription_id,amount,currency,payment_status,provider,provider_reference,paid_at) VALUES(?,?,?,'paid','manual',?,CURRENT_TIMESTAMP)",
+     [invoice.subscription_id,invoice.total_amount,invoice.currency,invoice.invoice_number]
+    );
+    await recordPaidInvoiceCommission(connection,invoice);
+   }
    await writeEntityAudit(connection,req,invoice.organization_id,'PLATFORM_INVOICE_STATUS_CHANGED','platform_invoice',invoice.id,{from:invoice.status,to:status});
   }
   await connection.commit();connection.release();connection=null;
@@ -455,8 +470,8 @@ router.get('/support/:id',async(req,res,next)=>{
   );
   if(!tickets.length)return res.status(404).json({error:'Chat introuvable.'});
   const [messages]=await db.execute(
-   `SELECT m.id,m.user_id,m.message,m.created_at,u.full_name,(u.role='SUPER_ADMIN') is_agent
-    FROM support_ticket_messages m JOIN users u ON u.id=m.user_id
+   `SELECT m.id,m.user_id,m.message,m.created_at,COALESCE(u.full_name,ps.full_name,'Support REDAMS') full_name,(u.role='SUPER_ADMIN' OR m.staff_id IS NOT NULL) is_agent
+    FROM support_ticket_messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN platform_staff ps ON ps.id=m.staff_id
     WHERE m.ticket_id=? AND m.organization_id=? ORDER BY m.created_at,m.id`,
    [tickets[0].id,tickets[0].organization_id]
   );
@@ -569,8 +584,8 @@ router.get('/support-requests/:id',async(req,res,next)=>{
   );
   if(!tickets.length)return res.status(404).json({error:'Demande introuvable.'});
   const [messages]=await db.execute(
-   `SELECT m.id,m.user_id,m.message,m.created_at,u.full_name,(u.role='SUPER_ADMIN') is_agent
-    FROM support_ticket_messages m JOIN users u ON u.id=m.user_id
+   `SELECT m.id,m.user_id,m.message,m.created_at,COALESCE(u.full_name,ps.full_name,'Support REDAMS') full_name,(u.role='SUPER_ADMIN' OR m.staff_id IS NOT NULL) is_agent
+    FROM support_ticket_messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN platform_staff ps ON ps.id=m.staff_id
     WHERE m.ticket_id=? AND m.organization_id=? ORDER BY m.created_at,m.id`,
    [tickets[0].id,tickets[0].organization_id]
   );

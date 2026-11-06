@@ -15,7 +15,7 @@ async function authenticate(req,res,next){
            s.max_users subscription_max_users
     FROM users u JOIN organizations o ON o.id=u.organization_id
     LEFT JOIN subscriptions s ON s.id=(SELECT MAX(s2.id) FROM subscriptions s2 WHERE s2.organization_id=u.organization_id)
-    LEFT JOIN plans p ON p.id=s.plan_id
+    LEFT JOIN plans p ON p.id=IF(s.status='trialing' AND s.current_period_end>CURDATE(),s.plan_id,COALESCE(s.target_plan_id,s.plan_id))
     WHERE u.id=? LIMIT 1`,
    [p.sub]
   );

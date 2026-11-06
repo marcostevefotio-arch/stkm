@@ -152,5 +152,5 @@ test('sales, cash, reports, settings, support and administration APIs require an
   assert.equal(support.status, 401);
   assert.equal(adminUsers.status, 401);
   assert.equal(adminAudit.status, 401);
-  assert.equal(platform.status, 401);
+  assert.equal(platform.status, 410);
 });

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>REDAMS · Portail plateforme</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&amp;family=Montserrat:wght@600;700;800&amp;display=swap">
+    <link rel="stylesheet" href="/css/staff.css">
+</head>
+<body>
+    <main id="login-view" class="sp-login" hidden>
+        <form id="login-form" class="sp-login-card" autocomplete="on">
+            <div class="sp-brand"><span>R</span><strong>REDAMS<small>PORTAIL PLATEFORME</small></strong></div>
+            <h1>Connexion employé</h1>
+            <p class="sp-muted">Accès réservé à l’équipe REDAMS.</p>
+            <label>Adresse e-mail<input name="email" type="email" autocomplete="username" required></label>
+            <label>Mot de passe<input name="password" type="password" autocomplete="current-password" required></label>
+            <p id="login-error" class="sp-error" role="alert"></p>
+            <button class="sp-btn" type="submit">Se connecter</button>
+        </form>
+    </main>
+
+    <div id="app-view" class="sp-shell" hidden>
+        <aside id="sp-sidebar" class="sp-sidebar">
+            <div class="sp-brand"><span>R</span><strong>REDAMS<small>PORTAIL PLATEFORME</small></strong></div>
+            <nav id="sp-nav" aria-label="Navigation du portail"></nav>
+        </aside>
+        <div id="sp-backdrop" class="sp-backdrop" hidden></div>
+        <section class="sp-main">
+            <header class="sp-header">
+                <button id="sp-menu" class="sp-icon-btn" type="button" aria-label="Ouvrir le menu">&#9776;</button>
+                <h2 id="sp-title">Tableau de bord</h2>
+                <div class="sp-user">
+                    <label class="sp-switch" title="Disponible pour prendre des demandes"><input id="sp-available" type="checkbox"><span>Disponible</span></label>
+                    <span id="sp-who"></span>
+                    <button id="sp-password" class="sp-link" type="button">Mot de passe</button>
+                    <button id="sp-logout" class="sp-link" type="button">Déconnexion</button>
+                </div>
+            </header>
+            <div id="sp-content" class="sp-content"></div>
+        </section>
+    </div>
+    <div id="sp-toast" class="sp-toast" role="status"></div>
+    <script src="/js/staff.js" defer></script>
+</body>
+</html>

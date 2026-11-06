@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS organizations (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(180) NOT NULL,
  address TEXT, phone VARCHAR(50), slogan VARCHAR(255), email VARCHAR(190),
+ partner_id BIGINT UNSIGNED NULL,
  slug VARCHAR(100) NOT NULL UNIQUE, status ENUM('active','suspended','closed') NOT NULL DEFAULT 'active',
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
@@ -51,7 +52,7 @@ CREATE TABLE IF NOT EXISTS notification_reads (
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS plans (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, code VARCHAR(60) NOT NULL UNIQUE, name VARCHAR(100) NOT NULL,
- plan_type ENUM('starter','ultimate','customized') NOT NULL DEFAULT 'customized',
+ plan_type ENUM('starter','ultimate','customized','trial') NOT NULL DEFAULT 'customized',
  billing_interval ENUM('monthly','annual','biennial') NOT NULL DEFAULT 'monthly',
  monthly_price DECIMAL(12,2) NOT NULL DEFAULT 0,
  annual_price DECIMAL(12,2) NULL, biennial_price DECIMAL(12,2) NULL,
@@ -62,9 +63,12 @@ CREATE TABLE IF NOT EXISTS plans (
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS platform_promotions (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, code VARCHAR(60) NOT NULL UNIQUE, name VARCHAR(120) NOT NULL,
+ plan_id BIGINT UNSIGNED NULL,
  discount_type ENUM('percent','fixed') NOT NULL, discount_value DECIMAL(12,2) NOT NULL,
- starts_at DATE NOT NULL, ends_at DATE NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE,
+ starts_at DATE NOT NULL, ends_at DATE NULL, new_users_only BOOLEAN NOT NULL DEFAULT FALSE,
+ is_active BOOLEAN NOT NULL DEFAULT TRUE,
  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ FOREIGN KEY(plan_id) REFERENCES plans(id),
  CHECK(discount_value>0)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -72,7 +76,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
  plan_id BIGINT UNSIGNED NOT NULL, promotion_id BIGINT UNSIGNED NULL,
  status ENUM('trialing','active','past_due','suspended','cancelled') NOT NULL DEFAULT 'trialing',
  billing_interval ENUM('monthly','annual','biennial') NOT NULL DEFAULT 'monthly',
- contract_amount DECIMAL(12,2) NULL, max_users INT UNSIGNED NULL, selected_modules JSON NULL,
+ contract_amount DECIMAL(12,2) NULL, max_users INT UNSIGNED NULL, selected_modules JSON NULL, target_plan_id BIGINT UNSIGNED NULL,
  current_period_start DATE NOT NULL, current_period_end DATE NOT NULL,
  FOREIGN KEY(organization_id) REFERENCES organizations(id), FOREIGN KEY(plan_id) REFERENCES plans(id),
  FOREIGN KEY(promotion_id) REFERENCES platform_promotions(id),
@@ -98,6 +102,28 @@ CREATE TABLE IF NOT EXISTS platform_invoices (
  FOREIGN KEY(subscription_id) REFERENCES subscriptions(id),
  FOREIGN KEY(promotion_id) REFERENCES platform_promotions(id),
  FOREIGN KEY(created_by) REFERENCES users(id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS platform_partners (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(180) NOT NULL, email VARCHAR(190) NULL,
+ phone VARCHAR(50) NULL, partner_type VARCHAR(80) NOT NULL, category VARCHAR(80) NOT NULL,
+ referral_code VARCHAR(24) NOT NULL UNIQUE, commission_percent DECIMAL(5,2) NULL,
+ is_active BOOLEAN NOT NULL DEFAULT TRUE, notes VARCHAR(1000) NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_platform_partner_email(email)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS platform_partner_commissions (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, partner_id BIGINT UNSIGNED NOT NULL,
+ organization_id BIGINT UNSIGNED NOT NULL, invoice_id BIGINT UNSIGNED NOT NULL,
+ invoice_amount DECIMAL(12,2) NOT NULL, commission_percent DECIMAL(5,2) NOT NULL,
+ commission_amount DECIMAL(12,2) NOT NULL, currency CHAR(3) NOT NULL,
+ status ENUM('pending','paid') NOT NULL DEFAULT 'pending',
+ payout_id BIGINT UNSIGNED NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ paid_at DATETIME NULL,
+ UNIQUE KEY uq_partner_commission_invoice(invoice_id),
+ KEY idx_partner_commissions_partner_status(partner_id,status,created_at),
+ FOREIGN KEY(partner_id) REFERENCES platform_partners(id),
+ FOREIGN KEY(organization_id) REFERENCES organizations(id),
+ FOREIGN KEY(invoice_id) REFERENCES platform_invoices(id)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS platform_faqs (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, question VARCHAR(255) NOT NULL,
@@ -346,9 +372,11 @@ CREATE TABLE IF NOT EXISTS support_tickets (
  user_id BIGINT UNSIGNED NOT NULL, subject VARCHAR(190) NOT NULL, message TEXT NOT NULL,
  status ENUM('open','in_progress','closed') NOT NULL DEFAULT 'open', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
  support_token CHAR(32) NULL, assigned_agent_id BIGINT UNSIGNED NULL,
+ assigned_staff_id BIGINT UNSIGNED NULL, assignment_type ENUM('assigned','voluntary') NULL,
+ assigned_staff_at DATETIME NULL, closed_at DATETIME NULL,
  KEY idx_support_tickets_tenant_user(organization_id,user_id,created_at),
  UNIQUE KEY uq_support_ticket_token(support_token),
- KEY idx_support_queue(assigned_agent_id,status,created_at),
+ KEY idx_support_queue(assigned_agent_id,status,created_at), KEY idx_support_staff_history(assigned_staff_id,status,closed_at),
  FOREIGN KEY(assigned_agent_id) REFERENCES users(id),
  FOREIGN KEY(organization_id) REFERENCES organizations(id), FOREIGN KEY(user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
@@ -366,6 +394,89 @@ CREATE TABLE IF NOT EXISTS support_agent_presence (
  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS support_ticket_feedback (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, organization_id BIGINT UNSIGNED NOT NULL,
+ ticket_id BIGINT UNSIGNED NOT NULL, user_id BIGINT UNSIGNED NOT NULL,
+ rating TINYINT UNSIGNED NOT NULL, comment VARCHAR(1000) NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_support_ticket_feedback_ticket(ticket_id),
+ KEY idx_support_feedback_staff(organization_id,created_at),
+ CONSTRAINT chk_support_feedback_rating CHECK (rating BETWEEN 1 AND 5),
+ FOREIGN KEY(organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+ FOREIGN KEY(ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE,
+ FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS platform_settings (
  setting_key VARCHAR(100) PRIMARY KEY, setting_value JSON, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS platform_staff (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, full_name VARCHAR(180) NOT NULL, email VARCHAR(190) NOT NULL,
+ password_hash VARCHAR(255) NOT NULL, role ENUM('PLATFORM_ADMIN','SUPPORT','BILLING','VIEWER') NOT NULL DEFAULT 'SUPPORT',
+ job_title VARCHAR(120) NULL, phone VARCHAR(40) NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE,
+ is_available BOOLEAN NOT NULL DEFAULT FALSE, password_version INT UNSIGNED NOT NULL DEFAULT 0,
+ last_login_at TIMESTAMP NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_platform_staff_email(email)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS platform_staff_schedules (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, staff_id BIGINT UNSIGNED NOT NULL, weekday TINYINT UNSIGNED NOT NULL,
+ start_time TIME NOT NULL, end_time TIME NOT NULL, KEY idx_staff_schedule(staff_id,weekday),
+ FOREIGN KEY(staff_id) REFERENCES platform_staff(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS platform_staff_work_sessions (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, staff_id BIGINT UNSIGNED NOT NULL,
+ clock_in DATETIME NOT NULL, clock_out DATETIME NULL,
+ KEY idx_staff_work_history(staff_id,clock_in),
+ FOREIGN KEY(staff_id) REFERENCES platform_staff(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS platform_partner_payouts (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, partner_id BIGINT UNSIGNED NOT NULL,
+ amount DECIMAL(12,2) NOT NULL, currency CHAR(3) NOT NULL, commission_count INT UNSIGNED NOT NULL,
+ period_start DATE NOT NULL, period_end DATE NOT NULL, payment_reference VARCHAR(190) NULL,
+ paid_by_staff_id BIGINT UNSIGNED NOT NULL, paid_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ KEY idx_partner_payouts_partner_date(partner_id,paid_at),
+ FOREIGN KEY(partner_id) REFERENCES platform_partners(id),
+ FOREIGN KEY(paid_by_staff_id) REFERENCES platform_staff(id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS platform_claims (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, reference VARCHAR(30) NOT NULL, organization_id BIGINT UNSIGNED NOT NULL,
+ subject VARCHAR(190) NOT NULL, description TEXT NOT NULL,
+ category ENUM('billing','service','technical','other') NOT NULL DEFAULT 'other',
+ priority ENUM('low','normal','high','urgent') NOT NULL DEFAULT 'normal',
+ status ENUM('open','in_progress','resolved','rejected') NOT NULL DEFAULT 'open',
+ assigned_staff_id BIGINT UNSIGNED NULL, resolution TEXT NULL, created_by_staff_id BIGINT UNSIGNED NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ resolved_at DATETIME NULL, UNIQUE KEY uq_platform_claim_reference(reference), KEY idx_platform_claims_status(status,created_at),
+ KEY idx_platform_claims_org(organization_id,created_at),
+ FOREIGN KEY(organization_id) REFERENCES organizations(id),
+ FOREIGN KEY(assigned_staff_id) REFERENCES platform_staff(id) ON DELETE SET NULL,
+ FOREIGN KEY(created_by_staff_id) REFERENCES platform_staff(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS platform_claim_notes (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, claim_id BIGINT UNSIGNED NOT NULL, staff_id BIGINT UNSIGNED NULL,
+ note TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, KEY idx_claim_notes(claim_id,created_at),
+ FOREIGN KEY(claim_id) REFERENCES platform_claims(id) ON DELETE CASCADE,
+ FOREIGN KEY(staff_id) REFERENCES platform_staff(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS client_api_tokens (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, organization_id BIGINT UNSIGNED NOT NULL, name VARCHAR(120) NOT NULL,
+ token_prefix CHAR(12) NOT NULL, token_hash CHAR(64) NOT NULL, expires_at DATETIME NULL, revoked_at DATETIME NULL,
+ last_used_at DATETIME NULL, created_by_staff_id BIGINT UNSIGNED NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_client_api_token_hash(token_hash), KEY idx_client_api_tokens_org(organization_id,created_at),
+ FOREIGN KEY(organization_id) REFERENCES organizations(id),
+ FOREIGN KEY(created_by_staff_id) REFERENCES platform_staff(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS platform_audit_logs (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, staff_id BIGINT UNSIGNED NULL, organization_id BIGINT UNSIGNED NULL,
+ action VARCHAR(80) NOT NULL, entity_type VARCHAR(60) NOT NULL, entity_id VARCHAR(40) NULL, details_json JSON NULL,
+ created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, KEY idx_platform_audit(created_at),
+ FOREIGN KEY(staff_id) REFERENCES platform_staff(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS tenant_traffic_daily (
+ organization_id BIGINT UNSIGNED NOT NULL, day DATE NOT NULL,
+ requests INT UNSIGNED NOT NULL DEFAULT 0, client_errors INT UNSIGNED NOT NULL DEFAULT 0,
+ server_errors INT UNSIGNED NOT NULL DEFAULT 0, response_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+ last_request_at TIMESTAMP NULL,
+ PRIMARY KEY(organization_id,day), KEY idx_traffic_day(day)
 ) ENGINE=InnoDB;

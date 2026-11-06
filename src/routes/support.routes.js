@@ -141,9 +141,9 @@ router.get('/chat/:token',async(req,res,next)=>{
   );
   if(!tickets.length)return res.status(404).json({error:'Chat introuvable.'});
   const [messages]=await db.execute(
-   `SELECT m.id,m.user_id,m.message,m.created_at,u.full_name,
-           (u.role='SUPER_ADMIN') is_agent
-    FROM support_ticket_messages m JOIN users u ON u.id=m.user_id
+   `SELECT m.id,m.user_id,m.message,m.created_at,COALESCE(u.full_name,ps.full_name,'Support REDAMS') full_name,
+           (u.role='SUPER_ADMIN' OR m.staff_id IS NOT NULL) is_agent
+    FROM support_ticket_messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN platform_staff ps ON ps.id=m.staff_id
     WHERE m.ticket_id=? AND m.organization_id=? ORDER BY m.created_at,m.id`,
    [tickets[0].id,tickets[0].organization_id]
   );
@@ -185,20 +185,49 @@ router.get('/:id',async(req,res,next)=>{
  if(!validId(req.params.id))return res.status(400).json({error:'Identifiant de demande invalide.'});
  try{
   const [tickets]=await db.execute(
-   `SELECT t.id,t.user_id,t.subject,t.message,t.status,t.created_at,u.full_name requester_name
+    `SELECT t.id,t.user_id,t.subject,t.message,t.status,t.created_at,t.closed_at,u.full_name requester_name
     FROM support_tickets t JOIN users u ON u.id=t.user_id
     WHERE t.id=? AND ${ticketVisibility(req)} LIMIT 1`,
    [req.params.id,...visibilityValues(req)]
   );
   if(!tickets.length)return res.status(404).json({error:'Demande introuvable.'});
   const [messages]=await db.execute(
-   `SELECT m.id,m.user_id,m.message,m.created_at,u.full_name
-    FROM support_ticket_messages m JOIN users u ON u.id=m.user_id
+   `SELECT m.id,m.user_id,m.message,m.created_at,COALESCE(u.full_name,ps.full_name,'Support REDAMS') full_name,(u.role='SUPER_ADMIN' OR m.staff_id IS NOT NULL) is_agent
+    FROM support_ticket_messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN platform_staff ps ON ps.id=m.staff_id
     WHERE m.ticket_id=? AND m.organization_id=? ORDER BY m.created_at,m.id`,
    [req.params.id,req.tenantId]
   );
-  res.json({ticket:tickets[0],messages});
+  const [feedback]=await db.execute('SELECT rating,comment,created_at FROM support_ticket_feedback WHERE ticket_id=? LIMIT 1',[req.params.id]);
+  res.json({ticket:tickets[0],messages,feedback:feedback[0]||null});
  }catch(error){next(error);}
+});
+
+router.post('/:id/feedback',async(req,res,next)=>{
+ if(!validId(req.params.id))return res.status(400).json({error:'Identifiant de demande invalide.'});
+ const rating=Number(req.body?.rating),comment=typeof req.body?.comment==='string'?req.body.comment.trim():'';
+ if(!Number.isInteger(rating)||rating<1||rating>5||comment.length>1000)return res.status(400).json({error:'Choisissez une note de 1 à 5 et un commentaire de 1 000 caractères maximum.'});
+ let connection;
+ try{
+  connection=await db.getConnection();await connection.beginTransaction();
+  const [tickets]=await connection.execute(
+    `SELECT id,status FROM support_tickets WHERE id=? AND organization_id=? AND user_id=? FOR UPDATE`,
+    [req.params.id,req.tenantId,req.user.id]
+  );
+  if(!tickets.length){await connection.rollback();connection.release();connection=null;return res.status(404).json({error:'Demande introuvable.'});}
+  if(tickets[0].status!=='closed'){await connection.rollback();connection.release();connection=null;return res.status(409).json({error:'Vous pourrez évaluer cette demande après sa clôture.'});}
+  const [existing]=await connection.execute('SELECT id FROM support_ticket_feedback WHERE ticket_id=? LIMIT 1',[req.params.id]);
+  if(existing.length){await connection.rollback();connection.release();connection=null;return res.status(409).json({error:'Cette demande a déjà été évaluée.'});}
+  await connection.execute(
+    'INSERT INTO support_ticket_feedback(organization_id,ticket_id,user_id,rating,comment) VALUES(?,?,?,?,?)',
+    [req.tenantId,req.params.id,req.user.id,rating,comment||null]
+  );
+  await connection.commit();connection.release();connection=null;
+  res.status(201).json({message:'Merci pour votre évaluation.'});
+ }catch(error){
+  if(connection){try{await connection.rollback();}finally{connection.release();}}
+  if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'Cette demande a déjà été évaluée.'});
+  next(error);
+ }
 });
 
 router.post('/:id/messages',async(req,res,next)=>{
@@ -246,7 +275,7 @@ router.patch('/:id/status',async(req,res,next)=>{
    await connection.rollback();connection.release();connection=null;return res.status(403).json({error:'Seuls les administrateurs peuvent modifier le statut de cette demande.'});
   }
   if(tickets[0].status===status){await connection.rollback();connection.release();connection=null;return res.json({message:'Le statut de la demande est inchangé.'});}
-  await connection.execute('UPDATE support_tickets SET status=? WHERE id=? AND organization_id=?',[status,req.params.id,req.tenantId]);
+  await connection.execute("UPDATE support_tickets SET status=?,closed_at=CASE WHEN ?='closed' THEN COALESCE(closed_at,NOW()) ELSE NULL END WHERE id=? AND organization_id=?",[status,status,req.params.id,req.tenantId]);
   await writeAudit(connection,req,'SUPPORT_TICKET_STATUS_CHANGED',req.params.id,{from:tickets[0].status,to:status});
   await connection.commit();connection.release();connection=null;
   res.json({message:'Statut de la demande mis à jour.'});

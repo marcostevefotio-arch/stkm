@@ -24,6 +24,7 @@ const DEFAULT_PLANS=[
  {code:'starter',name:'Starter',plan_type:'starter',monthly_price:15000,annual_price:150000,biennial_price:280000,extra_user_price:5000,currency:'XAF',max_users:3,max_products:10000000,included_modules:STARTER_MODULES,is_active:true},
  {code:'ultimate',name:'Ultimate',plan_type:'ultimate',monthly_price:25000,annual_price:350000,biennial_price:600000,extra_user_price:5000,currency:'XAF',max_users:5,max_products:10000000,included_modules:ALL_MODULES,is_active:true},
  {code:'customized',name:'Customized',plan_type:'customized',monthly_price:0,annual_price:null,biennial_price:null,extra_user_price:0,currency:'XAF',max_users:1,max_products:10000000,included_modules:ALL_MODULES,module_prices:CUSTOMIZED_MODULE_PRICES,is_active:true},
+ {code:'trial',name:'Essai',plan_type:'trial',monthly_price:0,annual_price:0,biennial_price:0,extra_user_price:0,currency:'XAF',max_users:5,max_products:10000000,included_modules:ALL_MODULES,is_active:true},
 ];
 
 function parseJson(value,fallback){
@@ -36,7 +37,7 @@ function parseJson(value,fallback){
 
 function getPlanModules(plan){
  if(plan.plan_type==='starter')return STARTER_MODULES;
- if(plan.plan_type==='ultimate')return ALL_MODULES;
+ if(plan.plan_type==='ultimate'||plan.plan_type==='trial')return ALL_MODULES;
  const modules=parseJson(plan.included_modules,[]);
  return Array.isArray(modules)?modules.filter(module=>MODULE_KEYS.includes(module)):[];
 }

@@ -44,7 +44,7 @@ router.get('/',async(req,res,next)=>{
 
   const [tickets]=await db.execute(
    `SELECT t.id,t.subject,t.status,
-           (SELECT MAX(m.created_at) FROM support_ticket_messages m WHERE m.ticket_id=t.id AND m.organization_id=t.organization_id AND m.user_id<>t.user_id) last_reply
+           (SELECT MAX(m.created_at) FROM support_ticket_messages m WHERE m.ticket_id=t.id AND m.organization_id=t.organization_id AND (m.user_id IS NULL OR m.user_id<>t.user_id)) last_reply
     FROM support_tickets t
     WHERE t.organization_id=? AND t.user_id=? AND t.status<>'closed'
     HAVING last_reply IS NOT NULL AND last_reply>=NOW()-INTERVAL 7 DAY

@@ -88,6 +88,45 @@ test('support ticket creation validates input and writes an audit record atomica
  assert.equal(rolledBack,false);
 });
 
+test('feedback validates its rating and stores one review on a closed ticket',async t=>{
+ const originalGetConnection=db.getConnection;let inserted;
+ db.getConnection=async()=>({
+  beginTransaction:async()=>{},
+  commit:async()=>{},
+  rollback:async()=>{},
+  release:()=>{},
+  execute:async(sql,values)=>{
+   if(sql.includes('SELECT id,status FROM support_tickets'))return [[{id:21,status:'closed'}],[]];
+   if(sql.includes('SELECT id FROM support_ticket_feedback'))return [[],[]];
+   if(sql.startsWith('INSERT INTO support_ticket_feedback')){inserted=values;return [{insertId:3},[]];}
+   throw Error(`Unexpected SQL: ${sql}`);
+  }
+ });
+ t.after(()=>{db.getConnection=originalGetConnection;});
+ const url=await listen(t);
+ const send=body=>fetch(`${url}/21/feedback`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ assert.equal((await send({rating:6,comment:'Trop haut'})).status,400);
+ assert.equal(inserted,undefined);
+ const response=await send({rating:5,comment:'Réponse rapide'});
+ assert.equal(response.status,201);
+ assert.deepEqual(inserted,[42,'21',7,5,'Réponse rapide']);
+});
+
+test('support feedback is unavailable for another user ticket and for open tickets',async t=>{
+ const originalGetConnection=db.getConnection;
+ db.getConnection=async()=>({
+  beginTransaction:async()=>{},
+  commit:async()=>{},
+  rollback:async()=>{},
+  release:()=>{},
+  execute:async(sql,values)=>sql.includes('SELECT id,status FROM support_tickets')&&values[0]==='21'?[[{id:21,status:'in_progress'}],[]]:[[],[]]
+ });
+ t.after(()=>{db.getConnection=originalGetConnection;});
+ const url=await listen(t),send=id=>fetch(`${url}/${id}/feedback`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rating:4})});
+ assert.equal((await send('21')).status,409);
+ assert.equal((await send('22')).status,404);
+});
+
 test('direct support chat creates a secure token and assigns an available platform agent',async t=>{
  const originalGetConnection=db.getConnection;let ticketValues,auditValues,committed=false;
  db.getConnection=async()=>({

@@ -29,7 +29,7 @@ router.get('/catalog',async(req,res,next)=>{
     ORDER BY FIELD(plan_type,'starter','ultimate','customized'),monthly_price,id`
   );
   const [promotions]=await db.execute(
-   `SELECT id,code,name,discount_type,discount_value,DATE_FORMAT(starts_at,'%Y-%m-%d') starts_at,
+   `SELECT id,code,name,plan_id,discount_type,discount_value,new_users_only,DATE_FORMAT(starts_at,'%Y-%m-%d') starts_at,
            DATE_FORMAT(ends_at,'%Y-%m-%d') ends_at
     FROM platform_promotions
     WHERE is_active=TRUE AND starts_at<=CURDATE() AND (ends_at IS NULL OR ends_at>=CURDATE())
@@ -71,6 +71,7 @@ router.post('/register',async(req,res,next)=>{
  const slogan=typeof body.slogan==='string'?body.slogan.trim():'';
  const planId=String(body.plan_id||'');
  const promotionId=body.promotion_id?String(body.promotion_id):null;
+ const partnerCode=typeof body.partner_code==='string'?body.partner_code.trim().toUpperCase():'';
  const interval=String(body.billing_interval||'monthly');
  const selectedModules=body.selected_modules;
  const userLimit=body.user_limit===undefined||body.user_limit===''?null:Number(body.user_limit);
@@ -78,6 +79,7 @@ router.post('/register',async(req,res,next)=>{
     ownerName.length<2||ownerName.length>180||!validEmail(ownerEmail)||
     password.length<12||password.length>128||address.length>2000||phone.length>50||slogan.length>255||
     !validId(planId)||(promotionId&&!validId(promotionId))||
+    (partnerCode&&!/^[A-Z0-9]{6,24}$/.test(partnerCode))||
     !['monthly','annual','biennial'].includes(interval)||
     (userLimit!==null&&(!Number.isInteger(userLimit)||userLimit<1||userLimit>100000))||
     (selectedModules!==undefined&&(!Array.isArray(selectedModules)||selectedModules.some(module=>!MODULE_KEYS.includes(module))||new Set(selectedModules).size!==selectedModules.length))||
@@ -115,14 +117,30 @@ router.post('/register',async(req,res,next)=>{
   let validPromotionId=null;
   if(promotionId){
    const [promotions]=await connection.execute(
-    'SELECT id FROM platform_promotions WHERE id=? AND is_active=TRUE AND starts_at<=CURDATE() AND (ends_at IS NULL OR ends_at>=CURDATE()) FOR UPDATE',
+    'SELECT id,plan_id,discount_type,discount_value,new_users_only FROM platform_promotions WHERE id=? AND is_active=TRUE AND starts_at<=CURDATE() AND (ends_at IS NULL OR ends_at>=CURDATE()) FOR UPDATE',
     [promotionId]
    );
    if(!promotions.length){
     await connection.rollback();connection.release();connection=null;
     return res.status(400).json({error:'Cette promotion a expiré ou n’est plus disponible. Actualisez le panier.'});
    }
+   if(promotions[0].plan_id !== null && String(promotions[0].plan_id) !== String(planId)){
+    await connection.rollback();connection.release();connection=null;
+    return res.status(400).json({error:'Cette promotion ne s’applique pas au forfait sélectionné.'});
+   }
    validPromotionId=promotions[0].id;
+   const rawDiscount=promotions[0].discount_type==='percent'
+    ?contractAmount*Number(promotions[0].discount_value)/100:Number(promotions[0].discount_value);
+   contractAmount=Math.max(0,Math.round((contractAmount-Math.min(contractAmount,rawDiscount))*100)/100);
+  }
+  let partnerId=null;
+  if(partnerCode){
+   const [partners]=await connection.execute('SELECT id FROM platform_partners WHERE referral_code=? AND is_active=TRUE FOR UPDATE',[partnerCode]);
+   if(!partners.length){
+    await connection.rollback();connection.release();connection=null;
+    return res.status(400).json({error:'Ce code partenaire est invalide ou inactif.'});
+   }
+   partnerId=partners[0].id;
   }
   const slug=createSlug(organizationName),passwordHash=await bcrypt.hash(password,12);
   const [organization]=await connection.execute(
@@ -130,16 +148,18 @@ router.post('/register',async(req,res,next)=>{
    [organizationName,address||null,phone||null,slogan||null,organizationEmail,slug]
   );
   const organizationId=organization.insertId;
+  if(partnerId)await connection.execute('UPDATE organizations SET partner_id=? WHERE id=?',[partnerId,organizationId]);
   const [user]=await connection.execute(
    "INSERT INTO users(organization_id,full_name,email,password_hash,role,is_active) VALUES(?,?,?,?, 'OWNER',TRUE)",
    [organizationId,ownerName,ownerEmail,passwordHash]
   );
   await connection.execute('UPDATE account_email_claims SET user_id=? WHERE email=?',[user.insertId,ownerEmail]);
   await connection.execute('INSERT INTO organization_settings(organization_id,display_name) VALUES(?,?)',[organizationId,organizationName]);
+  const [trialPlans]=await connection.execute("SELECT id FROM plans WHERE code='trial' AND is_active=TRUE LIMIT 1");
   await connection.execute(
-   `INSERT INTO subscriptions(organization_id,plan_id,promotion_id,status,billing_interval,contract_amount,max_users,selected_modules,current_period_start,current_period_end)
-    VALUES(?,?,?,'trialing',?,?,?, ?,CURDATE(),DATE_ADD(CURDATE(),INTERVAL ${TRIAL_DAYS} DAY))`,
-   [organizationId,planId,validPromotionId,interval,contractAmount,maxUsers,JSON.stringify(modules)]
+   `INSERT INTO subscriptions(organization_id,plan_id,target_plan_id,promotion_id,status,billing_interval,contract_amount,max_users,selected_modules,current_period_start,current_period_end)
+    VALUES(?,?,?,?,'trialing',?,?,?, ?,CURDATE(),DATE_ADD(CURDATE(),INTERVAL ${TRIAL_DAYS} DAY))`,
+   [organizationId,trialPlans[0]?.id||planId,planId,validPromotionId,interval,contractAmount,maxUsers,JSON.stringify(modules)]
   );
   await connection.execute(
    'INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,details_json) VALUES(?,?,?,?,?,?)',

@@ -41,7 +41,7 @@
             if (settingsData.primary_color) document.documentElement.style.setProperty('--primary', settingsData.primary_color);
             if (settingsData.secondary_color) document.documentElement.style.setProperty('--accent', settingsData.secondary_color);
             updateTenantLogo(settingsData.logo_url);
-            $('#plan').textContent = subscription ? subscription.plan_name + ' · ' + subscription.status : 'Aucun abonnement';
+            $('#plan').textContent = subscription ? subscription.plan_name + (subscription.target_plan_name ? ' → ' + subscription.target_plan_name : '') + ' · ' + subscription.status : 'Aucun abonnement';
             $('#period').textContent = subscription ? 'Échéance : ' + new Date(subscription.current_period_end).toLocaleDateString('fr-FR') : '';
             $('#date').textContent = new Date().toLocaleDateString('fr-FR', { dateStyle: 'long' });
             const role = me.user.role;
@@ -60,11 +60,6 @@
             const modulePages = { stock: ['products', 'movements', 'alerts', 'codes'], procurement: ['suppliers', 'purchases'], sales: ['pos', 'invoices'], cash: ['cash'], patients: ['patients', 'insurers'], reports: ['reports'], administration: ['audit'] };
             for (const [feature, pages] of Object.entries(modulePages)) {
                 if (state.modules && !state.modules.includes(feature)) pages.forEach(page => document.querySelectorAll(`[data-page="${page}"]`).forEach(link => { link.hidden = true; }));
-            }
-            if (role === 'SUPER_ADMIN') {
-                const link = document.createElement('a');
-                link.dataset.page = 'platform'; link.textContent = 'Administration SaaS'; link.className = 'platform-nav-link';
-                document.querySelector('.sidebar nav').insertBefore(link, document.querySelector('[data-page="settings"]'));
             }
             $('#notification-compose').hidden = !state.canSendNotifications;
             const hash = location.hash.slice(1);
@@ -133,10 +128,10 @@
             toast('Cette fonctionnalité n’est pas comprise dans votre forfait.', 'error');
             page = 'dashboard';
         }
-        if (page === 'platform' && state.role !== 'SUPER_ADMIN') {
+        if (page === 'platform') {
             $('#title').textContent = titles.platform;
             location.hash = page;
-            $('#content').innerHTML = '<div class="panel"><h3>Accès réservé</h3><p class="error" role="alert">Cette section est réservée aux administrateurs de la plateforme.</p></div>';
+            $('#content').innerHTML = '<div class="panel"><h3>Administration déplacée</h3><p>L’administration de la plateforme est désormais disponible uniquement dans le <a href="/portal">portail employé</a>, avec un compte administrateur de la plateforme.</p></div>';
             return;
         }
         if (page.startsWith('global-search')) {
@@ -309,6 +304,30 @@
     }
     async function renderPlatformPricing(root, options, plans, promotions) {
         root.innerHTML = `${platformTabsMarkup('pricing')}<div class="platform-page"><section class="panel"><div class="panel-head"><div><h3>Forfaits et tarification</h3><p>Starter : 15 000 XAF/mois, 150 000 XAF/an ou 280 000 XAF/2 ans; 3 utilisateurs inclus, puis 5 000 XAF par utilisateur ajouté. Ultimate inclut toutes les fonctionnalités; les prix se configurent ici. Customized facture les fonctionnalités sélectionnées individuellement.</p></div></div><form data-plan-create class="platform-edit-form">${planEditor()}</form><div class="platform-plan-list">${plans.map(plan => `<form data-plan-edit="${esc(plan.id)}" data-edited="true" class="platform-edit-form platform-plan-card"><div class="panel-head"><div><h3>${esc(plan.name)}</h3><small>${esc(plan.code)} · ${plan.is_active ? 'Publié' : 'Brouillon'}</small></div></div>${planEditor(plan)}</form>`).join('') || '<p class="table-empty">Aucun forfait. Créez Starter, Ultimate ou Customized ci-dessus.</p>'}</div></section><section class="panel"><div class="panel-head"><div><h3>Promotions</h3><p>Créez les promotions publiées sur le portail et appliquez-les aux souscriptions ou aux factures.</p></div></div><form data-promotion-create class="platform-edit-form"><label>Code<input name="code" maxlength="60" pattern="[A-Z0-9][A-Z0-9_-]{1,59}" required></label><label>Nom<input name="name" maxlength="120" required></label><label>Type<select name="discount_type"><option value="percent">Pourcentage</option><option value="fixed">Montant fixe</option></select></label><label>Valeur<input name="discount_value" type="number" min="0.01" step="0.01" required></label><label>Début<input name="starts_at" type="date" required></label><label>Fin (facultative)<input name="ends_at" type="date"></label><label><input name="is_active" type="checkbox" checked> Publiée sur le portail</label><button class="btn">Créer la promotion</button></form><div class="tablewrap"><table><thead><tr><th>Code / nom</th><th>Réduction</th><th>Période</th><th>État</th><th>Action</th></tr></thead><tbody>${promotions.map(promo => `<tr><td><b>${esc(promo.code)}</b><input data-promo-name="${esc(promo.id)}" value="${esc(promo.name)}"></td><td><select data-promo-type="${esc(promo.id)}"><option value="percent"${promo.discount_type === 'percent' ? ' selected' : ''}>%</option><option value="fixed"${promo.discount_type === 'fixed' ? ' selected' : ''}>Montant</option></select><input type="number" min="0.01" step="0.01" data-promo-value="${esc(promo.id)}" value="${esc(promo.discount_value)}"></td><td><input type="date" data-promo-start="${esc(promo.id)}" value="${esc(String(promo.starts_at).slice(0,10))}"><input type="date" data-promo-end="${esc(promo.ends_at ? String(promo.ends_at).slice(0,10) : '')}"></td><td><label><input type="checkbox" data-promo-active="${esc(promo.id)}"${promo.is_active ? ' checked' : ''}> Publiée</label></td><td><button type="button" class="table-action" data-promo-save="${esc(promo.id)}">Enregistrer</button></td></tr>`).join('') || '<tr><td colspan="5" class="table-empty">Aucune promotion.</td></tr>'}</tbody></table></div></section></div>`;
+        const promotionForm = root.querySelector('[data-promotion-create]');
+        const planLabel = document.createElement('label');
+        planLabel.textContent = 'Forfait concerné';
+        const planSelect = document.createElement('select');
+        planSelect.name = 'plan_id';
+        planSelect.innerHTML = '<option value="">Tous les forfaits</option>' + plans.filter(plan => plan.plan_type !== 'trial').map(plan => `<option value="${esc(plan.id)}">${esc(plan.name)}</option>`).join('');
+        planLabel.append(planSelect);
+        promotionForm.insertBefore(planLabel, promotionForm.querySelector('[name="discount_type"]').closest('label'));
+        const promotionTable = root.querySelector('[data-promo-save]')?.closest('table');
+        if (promotionTable) {
+            const header = document.createElement('th');
+            header.textContent = 'Forfait';
+            promotionTable.tHead.rows[0].insertBefore(header, promotionTable.tHead.rows[0].cells[1]);
+            for (const promo of promotions) {
+                const button = root.querySelector(`[data-promo-save="${promo.id}"]`);
+                if (!button) continue;
+                const cell = document.createElement('td'), select = document.createElement('select');
+                select.dataset.promoPlan = String(promo.id);
+                select.setAttribute('aria-label', `Forfait de la promotion ${promo.code}`);
+                select.innerHTML = '<option value="">Tous les forfaits</option>' + plans.filter(plan => plan.plan_type !== 'trial').map(plan => `<option value="${esc(plan.id)}"${String(promo.plan_id || '') === String(plan.id) ? ' selected' : ''}>${esc(plan.name)}</option>`).join('');
+                cell.append(select);
+                button.closest('tr').insertBefore(cell, button.closest('tr').cells[1]);
+            }
+        }
         bindPlatformTabs(root, options);
         root.querySelectorAll('[data-plan-type]').forEach(select => {
             configurePlanEditor(select.form);
@@ -330,6 +349,7 @@
             event.preventDefault();
             const form = event.currentTarget, values = Object.fromEntries(new FormData(form));
             values.is_active = form.elements.is_active.checked;
+            values.plan_id = values.plan_id || null;
             try {
                 await api('/api/platform/promotions', { method: 'POST', body: JSON.stringify(values) });
                 toast('Promotion créée.');
@@ -341,7 +361,7 @@
             if (!button) return;
             const id = button.dataset.promoSave;
             try {
-                await api(`/api/platform/promotions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name: root.querySelector(`[data-promo-name="${id}"]`).value, discount_type: root.querySelector(`[data-promo-type="${id}"]`).value, discount_value: root.querySelector(`[data-promo-value="${id}"]`).value, starts_at: root.querySelector(`[data-promo-start="${id}"]`).value, ends_at: root.querySelector(`[data-promo-end="${id}"]`).value || null, is_active: root.querySelector(`[data-promo-active="${id}"]`).checked }) });
+                await api(`/api/platform/promotions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name: root.querySelector(`[data-promo-name="${id}"]`).value, plan_id: root.querySelector(`[data-promo-plan="${id}"]`).value || null, discount_type: root.querySelector(`[data-promo-type="${id}"]`).value, discount_value: root.querySelector(`[data-promo-value="${id}"]`).value, starts_at: root.querySelector(`[data-promo-start="${id}"]`).value, ends_at: root.querySelector(`[data-promo-end="${id}"]`).value || null, is_active: root.querySelector(`[data-promo-active="${id}"]`).checked }) });
                 toast('Promotion mise à jour.');
                 platformManagement(root, 'pricing', options);
             } catch (error) { toast(error.message, 'error'); }
@@ -784,7 +804,12 @@
                 const data = await api(`/api/support/${encodeURIComponent(ticketId)}`);
                 if (!overlay.isConnected) return;
                 const ticket = data.ticket, closed = ticket.status === 'closed';
-                modal.innerHTML = `<button type="button" class="close" aria-label="Fermer">×</button><h3 id="support-ticket-heading">${esc(ticket.subject)}</h3><div class="support-ticket-meta"><span>${esc(ticket.requester_name)}</span><span>${esc(new Date(ticket.created_at).toLocaleString('fr-FR'))}</span><span class="support-status status-${esc(ticket.status)}">${esc(supportStatusLabels[ticket.status] || ticket.status)}</span></div><article class="support-message"><b>${esc(ticket.requester_name)} · Demande initiale</b><p>${esc(ticket.message)}</p></article><div class="support-thread">${data.messages.map(message => `<article class="support-message"><b>${esc(message.full_name)} · ${esc(new Date(message.created_at).toLocaleString('fr-FR'))}</b><p>${esc(message.message)}</p></article>`).join('') || '<p class="notification-empty">Aucun échange supplémentaire.</p>'}</div>${state.canAdminister ? `<form data-support-status-form class="support-status-form"><label>Statut<select name="status">${Object.entries(supportStatusLabels).map(([value, label]) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><p class="error" role="alert"></p><button class="table-action">Mettre à jour le statut</button></form>` : Number(ticket.user_id) === state.userId && !closed ? '<button type="button" class="table-action" data-support-close-ticket>Clôturer ma demande</button>' : ''}${closed ? '<p class="notification-empty">Cette demande est clôturée. Contactez un administrateur pour la rouvrir.</p>' : `<form data-support-reply-form class="support-reply-form"><label>Ajouter une réponse<textarea name="message" rows="3" maxlength="5000" minlength="2" required></textarea></label><p class="error" role="alert"></p><button class="btn">Envoyer la réponse</button></form>`}`;
+                const feedbackMarkup = data.feedback
+                    ? `<section class="support-client-feedback"><b>Évaluation client : ${esc(data.feedback.rating)}/5</b>${data.feedback.comment ? `<p>${esc(data.feedback.comment)}</p>` : ''}</section>`
+                    : Number(ticket.user_id) === state.userId && closed
+                        ? '<form data-support-feedback class="support-reply-form"><h4>Évaluer cette demande</h4><label>Votre note<select name="rating" required><option value="">Choisir une note</option><option value="5">5 — Excellent</option><option value="4">4 — Très bien</option><option value="3">3 — Bien</option><option value="2">2 — À améliorer</option><option value="1">1 — Insatisfait</option></select></label><label>Commentaire (facultatif)<textarea name="comment" rows="3" maxlength="1000"></textarea></label><p class="error" role="alert"></p><button class="btn">Envoyer mon avis</button></form>'
+                        : '';
+                modal.innerHTML = `<button type="button" class="close" aria-label="Fermer">×</button><h3 id="support-ticket-heading">${esc(ticket.subject)}</h3><div class="support-ticket-meta"><span>${esc(ticket.requester_name)}</span><span>${esc(new Date(ticket.created_at).toLocaleString('fr-FR'))}</span><span class="support-status status-${esc(ticket.status)}">${esc(supportStatusLabels[ticket.status] || ticket.status)}</span></div><article class="support-message"><b>${esc(ticket.requester_name)} · Demande initiale</b><p>${esc(ticket.message)}</p></article><div class="support-thread">${data.messages.map(message => `<article class="support-message"><b>${esc(message.full_name)} · ${esc(new Date(message.created_at).toLocaleString('fr-FR'))}</b><p>${esc(message.message)}</p></article>`).join('') || '<p class="notification-empty">Aucun échange supplémentaire.</p>'}</div>${feedbackMarkup}${state.canAdminister ? `<form data-support-status-form class="support-status-form"><label>Statut<select name="status">${Object.entries(supportStatusLabels).map(([value, label]) => `<option value="${value}"${ticket.status === value ? ' selected' : ''}>${label}</option>`).join('')}</select></label><p class="error" role="alert"></p><button class="table-action">Mettre à jour le statut</button></form>` : Number(ticket.user_id) === state.userId && !closed ? '<button type="button" class="table-action" data-support-close-ticket>Clôturer ma demande</button>' : ''}${closed ? '<p class="notification-empty">Cette demande est clôturée. Contactez un administrateur pour la rouvrir.</p>' : `<form data-support-reply-form class="support-reply-form"><label>Ajouter une réponse<textarea name="message" rows="3" maxlength="5000" minlength="2" required></textarea></label><p class="error" role="alert"></p><button class="btn">Envoyer la réponse</button></form>`}`;
                 modal.querySelector('.close').onclick = close;
                 const statusForm = modal.querySelector('[data-support-status-form]');
                 if (statusForm) statusForm.onsubmit = async event => {
@@ -796,6 +821,12 @@
                 if (closeButton) closeButton.onclick = async () => {
                     try { await api(`/api/support/${encodeURIComponent(ticketId)}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'closed' }) }); toast('Demande clôturée.'); await load(); }
                     catch (reason) { toast(reason.message, 'error'); }
+                };
+                const feedbackForm = modal.querySelector('[data-support-feedback]');
+                if (feedbackForm) feedbackForm.onsubmit = async event => {
+                    event.preventDefault(); const form = event.currentTarget, error = form.querySelector('.error'); error.textContent = '';
+                    try { await api(`/api/support/${encodeURIComponent(ticketId)}/feedback`, { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); toast('Merci pour votre évaluation.'); await load(); }
+                    catch (reason) { error.textContent = reason.message; }
                 };
                 const replyForm = modal.querySelector('[data-support-reply-form]');
                 if (replyForm) replyForm.onsubmit = async event => {
@@ -1801,7 +1832,7 @@
             const [sub, catalog] = await Promise.all([api('/api/subscription'), api('/api/public/catalog').catch(() => ({ plans: [] }))]);
             if (!sub) { box.insertAdjacentHTML('beforeend', '<p>Aucun abonnement actif.</p>'); box.querySelector('.notification-empty').remove(); return; }
             const plans = (catalog.plans || []).filter(plan => plan.name !== sub.plan_name);
-            box.innerHTML = `<button type="button" class="close" aria-label="Fermer">×</button><h3>Mon abonnement</h3><dl class="profile-list"><dt>Forfait</dt><dd>${esc(sub.plan_name)}</dd><dt>Statut</dt><dd>${esc(sub.status)}</dd><dt>Échéance</dt><dd>${esc(fmtDate(sub.current_period_end))}</dd><dt>Utilisateurs maximum</dt><dd>${esc(sub.max_users ?? '—')}</dd></dl>${plans.length ? `<h4>Changer de forfait</h4><form id="upgrade-form" class="upgrade-form"><label>Forfait souhaité<select name="plan">${plans.map(plan => `<option value="${esc(plan.name)}">${esc(plan.name)} — ${formatMoney(plan.monthly_price)}/mois</option>`).join('')}</select></label><p class="error" role="alert"></p><button class="btn">Demander un upgrade</button></form>` : ''}`;
+            box.innerHTML = `<button type="button" class="close" aria-label="Fermer">×</button><h3>Mon abonnement</h3><dl class="profile-list"><dt>Forfait</dt><dd>${esc(sub.plan_name)}${sub.target_plan_name ? ` (forfait choisi : ${esc(sub.target_plan_name)})` : ''}</dd><dt>Statut</dt><dd>${esc(sub.status)}</dd><dt>Échéance</dt><dd>${esc(fmtDate(sub.current_period_end))}</dd><dt>Utilisateurs maximum</dt><dd>${esc(sub.max_users ?? '—')}</dd></dl>${plans.length ? `<h4>Changer de forfait</h4><form id="upgrade-form" class="upgrade-form"><label>Forfait souhaité<select name="plan">${plans.map(plan => `<option value="${esc(plan.name)}">${esc(plan.name)} — ${formatMoney(plan.monthly_price)}/mois</option>`).join('')}</select></label><p class="error" role="alert"></p><button class="btn">Demander un upgrade</button></form>` : ''}`;
             box.querySelector('.close').onclick = () => overlay.remove();
             const form = box.querySelector('#upgrade-form');
             if (form) form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; try { await api('/api/support', { method: 'POST', body: JSON.stringify({ subject: `Demande de changement de forfait : ${form.elements.plan.value}`, message: `Je souhaite passer du forfait ${sub.plan_name} au forfait ${form.elements.plan.value}.` }) }); overlay.remove(); toast('Demande envoyée à l’assistance.'); } catch (reason) { error.textContent = reason.message; } };

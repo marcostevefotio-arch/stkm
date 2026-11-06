@@ -104,7 +104,7 @@ test('public catalog exposes purchasable Starter, Ultimate and Customized plans'
 test('signup creates the organization, owner and trial subscription in one transaction',async t=>{
  const originalGetConnection=db.getConnection,oldSecret=process.env.JWT_SECRET;
  const statements=[];
- let committed=false,rolledBack=false,released=false;
+ let committed=false,rolledBack=false,released=false,promotionPlanId=99;
  process.env.JWT_SECRET='public-signup-test-secret';
  db.getConnection=async()=>({
   beginTransaction:async()=>{},
@@ -119,7 +119,8 @@ test('signup creates the organization, owner and trial subscription in one trans
     extra_user_price:5000,currency:'XAF',max_users:3,max_products:10000000,
     included_modules:['stock','procurement','sales','cash'],module_prices:null,
    }],[]];
-   if(sql.startsWith('SELECT id FROM platform_promotions'))return [[{id:3}],[]];
+   if(sql.startsWith('SELECT id,plan_id,discount_type,discount_value,new_users_only FROM platform_promotions'))return [[{id:3,plan_id:promotionPlanId,discount_type:'percent',discount_value:10,new_users_only:true}],[]];
+   if(sql.startsWith('SELECT id FROM platform_partners'))return [[{id:6}],[]];
    if(sql.startsWith('INSERT INTO organizations'))return [{insertId:42},[]];
    if(sql.startsWith('INSERT INTO users'))return [{insertId:7},[]];
    if(sql.startsWith('SELECT u.id,u.organization_id'))return [[{
@@ -134,10 +135,7 @@ test('signup creates the organization, owner and trial subscription in one trans
   if(oldSecret===undefined)delete process.env.JWT_SECRET;else process.env.JWT_SECRET=oldSecret;
  });
  const url=await listen(t);
- const response=await fetch(`${url}/register`,{
-  method:'POST',
-  headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({
+ const registration={
    organization_name:'Clinique Test',
    organization_email:'CONTACT@EXAMPLE.COM',
    owner_full_name:'Propriétaire Test',
@@ -147,25 +145,37 @@ test('signup creates the organization, owner and trial subscription in one trans
    billing_interval:'annual',
    user_limit:4,
    promotion_id:'3',
+   partner_code:'PARTNER22',
    accept_terms:true,
-  }),
+  };
+ const postRegistration=()=>fetch(`${url}/register`,{
+  method:'POST',
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(registration),
  });
+ const mismatch=await postRegistration();
+ assert.equal(mismatch.status,400);
+ assert.match((await mismatch.json()).error,/ne s’applique pas au forfait sélectionné/);
+ assert.equal(rolledBack,true);
+ promotionPlanId=2;
+ const response=await postRegistration();
  assert.equal(response.status,201);
  const result=await response.json();
  assert.equal(result.trialDays,7);
  assert.equal(result.user.organization_id,42);
  assert.equal(jwt.verify(result.token,process.env.JWT_SECRET).sub,7);
  assert.equal(committed,true);
- assert.equal(rolledBack,false);
+ assert.equal(rolledBack,true);
  assert.equal(released,true);
  const claim=statements.find(item=>item.sql.startsWith('INSERT INTO account_email_claims'));
  assert.deepEqual(claim.values,['owner@example.com']);
  const organization=statements.find(item=>item.sql.startsWith('INSERT INTO organizations'));
  assert.equal(organization.values[0],'Clinique Test');
  assert.equal(organization.values[4],'contact@example.com');
+ assert.deepEqual(statements.find(item=>item.sql.startsWith('UPDATE organizations SET partner_id')).values,[6,42]);
  const subscription=statements.find(item=>item.sql.includes('INSERT INTO subscriptions'));
  assert.match(subscription.sql,/INTERVAL 7 DAY/);
- assert.deepEqual(subscription.values,[42,'2',3,'annual',155000,4,'["stock","procurement","sales","cash"]']);
+ assert.deepEqual(subscription.values,[42,2,'2',3,'annual',139500,4,'["stock","procurement","sales","cash"]']);
  const audit=statements.find(item=>item.values?.includes('TENANT_SIGNUP_COMPLETED'));
  assert.match(audit.values[5],/"trial_days":7/);
 });

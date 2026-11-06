@@ -143,30 +143,34 @@ test('platform can create a pricing plan and rejects invalid values',async t=>{
 });
 
 test('platform can create an active promotion for the public portal',async t=>{
- const originalGetConnection=db.getConnection,statements=[];let committed=false;
+ const originalGetConnection=db.getConnection,originalExecute=db.execute,statements=[];let committed=false;
+ db.execute=async sql=>{
+  if(sql.startsWith("SELECT id FROM plans WHERE id=? AND plan_type<>'trial'"))return [[{id:7}],[]];
+  throw Error(`Unexpected SQL: ${sql}`);
+ };
  db.getConnection=async()=>({
   beginTransaction:async()=>{},
   commit:async()=>{committed=true;},
   rollback:async()=>{},
   release:()=>{},
-  execute:async(sql,values)=>{statements.push({sql,values});return [{insertId:12,affectedRows:1},[]];}
+  execute:async(sql,values)=>{statements.push({sql,values});if(sql.startsWith("SELECT id FROM plans WHERE id=? AND plan_type<>'trial'"))return [[{id:7}],[]];return [{insertId:12,affectedRows:1},[]];}
  });
- t.after(()=>{db.getConnection=originalGetConnection;});
+ t.after(()=>{db.getConnection=originalGetConnection;db.execute=originalExecute;});
  const url=await listen(t);
  const response=await fetch(`${url}/promotions`,{
   method:'POST',
   headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({code:'WELCOME7',name:'Bienvenue',discount_type:'percent',discount_value:15,starts_at:'2026-11-04',ends_at:'2026-12-31',is_active:true}),
+  body:JSON.stringify({code:'WELCOME7',name:'Bienvenue',plan_id:'7',discount_type:'percent',discount_value:15,starts_at:'2026-11-04',ends_at:'2026-12-31',is_active:true}),
  });
  assert.equal(response.status,201);
  assert.deepEqual(await response.json(),{id:12,message:'Promotion créée.'});
  assert.equal(committed,true);
- assert.ok(statements.some(item=>item.sql.startsWith('INSERT INTO platform_promotions')));
+ assert.deepEqual(statements.find(item=>item.sql.startsWith('INSERT INTO platform_promotions')).values,['WELCOME7','Bienvenue','7','percent',15,'2026-11-04','2026-12-31',false,true]);
  assert.ok(statements.some(item=>item.values?.includes('PLATFORM_PROMOTION_CREATED')));
 });
 
-test('platform invoices apply active promotion discounts and create draft records',async t=>{
- const originalGetConnection=db.getConnection,statements=[];let committed=false;
+test('platform invoices apply eligible promotions and reject a promotion for another plan',async t=>{
+ const originalGetConnection=db.getConnection,statements=[];let committed=false,promotionPlanId=null;
  db.getConnection=async()=>({
   beginTransaction:async()=>{},
   commit:async()=>{committed=true;},
@@ -175,13 +179,13 @@ test('platform invoices apply active promotion discounts and create draft record
   execute:async(sql,values)=>{
    statements.push({sql,values});
    if(sql.startsWith('SELECT s.id,s.plan_id'))return [[{id:7,plan_id:2,contract_amount:'15000.00',monthly_price:'15000.00',currency:'XAF'}],[]];
-   if(sql.startsWith('SELECT id,discount_type,discount_value'))return [[{id:4,discount_type:'percent',discount_value:'20.00'}],[]];
+   if(sql.startsWith('SELECT id,plan_id,discount_type,discount_value'))return [[{id:4,plan_id:promotionPlanId,discount_type:'percent',discount_value:'20.00'}],[]];
    if(sql.startsWith('INSERT INTO platform_invoices'))return [{insertId:11},[]];
    return [{affectedRows:1},[]];
   }
  });
  t.after(()=>{db.getConnection=originalGetConnection;});
- const url=await listen(t),response=await fetch(`${url}/invoices`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({organization_id:'42',period_start:'2026-11-01',period_end:'2026-11-30',due_date:'2026-11-14',promotion_id:'4'})});
+ const url=await listen(t),invoiceBody={organization_id:'42',period_start:'2026-11-01',period_end:'2026-11-30',due_date:'2026-11-14',promotion_id:'4'},response=await fetch(`${url}/invoices`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(invoiceBody)});
  assert.equal(response.status,201);
  const data=await response.json();
  assert.equal(data.total_amount,12000);
@@ -189,6 +193,11 @@ test('platform invoices apply active promotion discounts and create draft record
  assert.equal(committed,true);
  const insert=statements.find(item=>item.sql.startsWith('INSERT INTO platform_invoices'));
  assert.deepEqual(insert.values.slice(6,10),[15000,3000,12000,'XAF']);
+ promotionPlanId=9;
+ const mismatched=await fetch(`${url}/invoices`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(invoiceBody)});
+ assert.equal(mismatched.status,400);
+ assert.match((await mismatched.json()).error,/ne s’applique pas au forfait de cet établissement/);
+ assert.equal(statements.filter(item=>item.sql.startsWith('INSERT INTO platform_invoices')).length,1);
 });
 
 test('platform can create a subscription when an organization has none',async t=>{

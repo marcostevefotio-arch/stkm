@@ -24,9 +24,23 @@
         catch { return {}; }
     };
     const query = new URLSearchParams(location.search);
+    let requestedPromotion = query.get('promotion');
+    const partnerCodeField = document.getElementById('partnerCode');
+    partnerCodeField.value = (query.get('ref') || '').toUpperCase();
     let catalog;
     const currentPlan = () => catalog?.plans.find(plan => String(plan.id) === planSelect.value);
-    const currentPromotion = () => catalog?.promotions.find(promo => String(promo.id) === promotionSelect.value);
+    const applicablePromotions = () => (catalog?.promotions || []).filter(promo => promo.plan_id === null || promo.plan_id === undefined || String(promo.plan_id) === planSelect.value);
+    const currentPromotion = () => applicablePromotions().find(promo => String(promo.id) === promotionSelect.value);
+    function updatePromotionOptions(preferred = null) {
+        const applicable = applicablePromotions();
+        const selected = preferred || promotionSelect.value;
+        const selectedPromo = applicable.find(promo => String(promo.id) === selected);
+        promotionSelect.innerHTML = '<option value="">Aucune promotion</option>' + applicable.map(promo => {
+            const target = promo.plan_id ? currentPlan()?.name || 'Forfait ciblé' : 'Tous les forfaits';
+            return `<option value="${safeText(promo.id)}">${safeText(promo.code)} · ${safeText(promo.name)} (${safeText(target)})</option>`;
+        }).join('');
+        promotionSelect.value = selectedPromo ? String(selectedPromo.id) : '';
+    }
     const selectedModules = () => [...moduleOptions.querySelectorAll('input[name="selected_module"]:checked')].map(input => input.value);
     const termAmount = (plan, interval, modules, users) => {
         const prices = parseObject(plan.module_prices);
@@ -113,6 +127,8 @@
     function selectPlan(preferredInterval) {
         const plan = currentPlan();
         if (!plan) return;
+        updatePromotionOptions(requestedPromotion);
+        requestedPromotion = null;
         const defaultUsers = plan.plan_type === 'customized' ? 1 : Number(plan.max_users);
         userLimit.value = String(defaultUsers);
         renderModules(plan, true);
@@ -129,9 +145,7 @@
             catalog = data;
             if (!catalog.plans.length) throw Error('Aucun forfait n’est ouvert à la souscription pour le moment.');
             planSelect.innerHTML = catalog.plans.map(plan => `<option value="${safeText(plan.id)}">${safeText(plan.name)}${plan.plan_type === 'customized' ? ' · à la carte' : ''}</option>`).join('');
-            promotionSelect.innerHTML = '<option value="">Aucune promotion</option>' + catalog.promotions.map(promo => `<option value="${safeText(promo.id)}">${safeText(promo.code)} · ${safeText(promo.name)}</option>`).join('');
             if (query.has('plan') && catalog.plans.some(plan => String(plan.id) === query.get('plan'))) planSelect.value = query.get('plan');
-            if (query.has('promotion') && catalog.promotions.some(promo => String(promo.id) === query.get('promotion'))) promotionSelect.value = query.get('promotion');
             selectPlan(query.get('billing_interval'));
         } catch (error) {
             errorBox.textContent = error.message;

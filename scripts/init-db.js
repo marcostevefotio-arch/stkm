@@ -1,16 +1,26 @@
 require('dotenv').config();
 const fs=require('fs'),path=require('path'),db=require('../src/config/database');
 const {ALL_MODULES,DEFAULT_PLANS}=require('../src/config/pricing');
+const {recordBuiltInMigration}=require('../src/services/database-upgrade.service');
 const columnMigrations=[
  ['users','password_version','INT UNSIGNED NOT NULL DEFAULT 0'],
  ['organization_settings','default_label_format',"VARCHAR(20) NOT NULL DEFAULT 'barcode'"],
  ['support_tickets','support_token','CHAR(32) NULL'],
  ['support_tickets','assigned_agent_id','BIGINT UNSIGNED NULL'],
+ ['support_tickets','assigned_staff_id','BIGINT UNSIGNED NULL'],
+ ['support_tickets','assignment_type',"ENUM('assigned','voluntary') NULL"],
+ ['support_tickets','assigned_staff_at','DATETIME NULL'],
+ ['support_tickets','closed_at','DATETIME NULL'],
+ ['support_ticket_messages','staff_id','BIGINT UNSIGNED NULL'],
+ ['platform_invoices','created_by_staff_id','BIGINT UNSIGNED NULL'],
  ['subscriptions','promotion_id','BIGINT UNSIGNED NULL'],
  ['organizations','address','TEXT NULL'],
  ['organizations','phone','VARCHAR(50) NULL'],
  ['organizations','slogan','VARCHAR(255) NULL'],
  ['organizations','email','VARCHAR(190) NULL'],
+ ['organizations','partner_id','BIGINT UNSIGNED NULL'],
+ ['platform_promotions','new_users_only','BOOLEAN NOT NULL DEFAULT FALSE'],
+ ['platform_promotions','plan_id','BIGINT UNSIGNED NULL'],
  ['organization_settings','sales_tax_rate','DECIMAL(5,2) NOT NULL DEFAULT 0'],
  ['organization_settings','patient_code_mode',"ENUM('auto','manual') NOT NULL DEFAULT 'manual'"],
  ['organization_settings','patient_code_format',"VARCHAR(60) NOT NULL DEFAULT 'PAT-{SEQ:5}'"],
@@ -18,7 +28,7 @@ const columnMigrations=[
  ['products','prescription_required','BOOLEAN NOT NULL DEFAULT FALSE'],
  ['products','max_customer_quantity','DECIMAL(14,3) NULL'],
  ['products','minimum_purchase_interval_hours','INT UNSIGNED NULL'],
- ['plans','plan_type',"ENUM('starter','ultimate','customized') NOT NULL DEFAULT 'customized'"],
+ ['plans','plan_type',"ENUM('starter','ultimate','customized','trial') NOT NULL DEFAULT 'customized'"],
  ['plans','annual_price','DECIMAL(12,2) NULL'],
  ['plans','biennial_price','DECIMAL(12,2) NULL'],
  ['plans','included_modules','JSON NULL'],
@@ -27,6 +37,7 @@ const columnMigrations=[
  ['subscriptions','contract_amount','DECIMAL(12,2) NULL'],
  ['subscriptions','max_users','INT UNSIGNED NULL'],
  ['subscriptions','selected_modules','JSON NULL'],
+ ['subscriptions','target_plan_id','BIGINT UNSIGNED NULL'],
 ];
 async function ensureColumn(table,column,definition){
  const [rows]=await db.execute(
@@ -53,13 +64,20 @@ async function ensureForeignKey(table,column,referencedTable,referencedColumn,co
  const sql=fs.readFileSync(path.join(__dirname,'../database/schema.sql'),'utf8');
  for(const statement of sql.split(/;\s*(?:\r?\n|$)/).map(value=>value.trim()).filter(Boolean))await db.query(statement);
  for(const [table,column,definition] of columnMigrations)await ensureColumn(table,column,definition);
+ await db.query("ALTER TABLE plans MODIFY plan_type ENUM('starter','ultimate','customized','trial') NOT NULL DEFAULT 'customized'");
  await db.query("ALTER TABLE plans MODIFY billing_interval ENUM('monthly','annual','biennial') NOT NULL DEFAULT 'monthly'");
  await db.query("ALTER TABLE subscriptions MODIFY billing_interval ENUM('monthly','annual','biennial') NOT NULL DEFAULT 'monthly'");
+ await db.query('ALTER TABLE support_ticket_messages MODIFY user_id BIGINT UNSIGNED NULL');
+ await db.query('ALTER TABLE platform_invoices MODIFY created_by BIGINT UNSIGNED NULL');
  await ensureIndex('support_tickets','uq_support_ticket_token','UNIQUE KEY uq_support_ticket_token(support_token)');
  await ensureIndex('support_tickets','idx_support_queue','KEY idx_support_queue(assigned_agent_id,status,created_at)');
+ await ensureIndex('support_tickets','idx_support_staff_history','KEY idx_support_staff_history(assigned_staff_id,status,closed_at)');
  await ensureIndex('users','idx_users_role_active','KEY idx_users_role_active(role,is_active)');
  await ensureForeignKey('support_tickets','assigned_agent_id','users','id','fk_support_ticket_agent');
  await ensureForeignKey('subscriptions','promotion_id','platform_promotions','id','fk_subscription_promotion');
+ await ensureForeignKey('organizations','partner_id','platform_partners','id','fk_organization_partner');
+ await ensureForeignKey('platform_promotions','plan_id','plans','id','fk_promotion_plan');
+ await recordBuiltInMigration(db,'2026110501_promotion_plan_scope');
  await db.execute(
   `INSERT IGNORE INTO account_email_claims(email,user_id)
    SELECT LOWER(email),MIN(id) FROM users GROUP BY LOWER(email)`
