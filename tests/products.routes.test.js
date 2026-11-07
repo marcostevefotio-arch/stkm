@@ -37,7 +37,30 @@ test('product creation persists prescription and advisory quantity rules',async(
  const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku:'SKU-8',name:'Produit contrôlé',unit:'boîte',quantity_on_hand:5,reorder_level:1,sale_price:12.5,prescription_required:true,max_customer_quantity:2,minimum_purchase_interval_hours:24})});
  assert.equal(response.status,201);
  assert.match(inserted.sql,/prescription_required,max_customer_quantity,minimum_purchase_interval_hours/);
- assert.deepEqual(inserted.values,[42,'SKU-8','Produit contrôlé',null,'boîte',5,1,12.5,null,true,2,24]);
+ assert.deepEqual(inserted.values,[42,'SKU-8','Produit contrôlé',null,'boîte',5,1,12.5,null,true,2,24,null]);
+});
+
+test('cost updates require a valid expected value and detect concurrent changes',async(t)=>{
+ const originalExecute=db.execute;
+ const calls=[];
+ db.execute=async(sql,values)=>{
+  calls.push({sql,values});
+  if(sql.startsWith('UPDATE products'))return [{affectedRows:0},[]];
+  if(sql.startsWith('SELECT id,purchase_cost'))return [[{id:8,purchase_cost:'8.0000'}],[]];
+  return [{affectedRows:1},[]];
+ };
+ t.after(()=>{db.execute=originalExecute;});
+ const url=await listen(t);
+ const put=body=>fetch(`${url}/8`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ assert.equal((await put({purchase_cost:'-1',expected_purchase_cost:null})).status,400);
+ assert.equal((await put({purchase_cost:'5.00001',expected_purchase_cost:null})).status,400);
+ assert.equal((await put({purchase_cost:'5.00'})).status,400);
+ assert.equal(calls.length,0);
+ const conflict=await put({purchase_cost:'7.0000',expected_purchase_cost:'5.0000'});
+ assert.equal(conflict.status,409);
+ assert.match((await conflict.json()).error,/changé/);
+ assert.match(calls[0].sql,/purchase_cost <=> \?/);
+ assert.deepEqual(calls[0].values,['7.0000','8',42,'5.0000']);
 });
 
 test('product label generation validates the format and selection before database access',async(t)=>{

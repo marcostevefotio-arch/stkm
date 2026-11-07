@@ -3,10 +3,12 @@ const db=require('../config/database');
 const {audit}=require('../services/audit.service');
 const {requireRole}=require('../middleware/auth');
 const allowCash=requireRole('OWNER','ADMIN','PHARMACIST','CASHIER');
+const {assertCashAccess,requireCashAccess}=require('../middleware/sale-workflow');
 const methods=new Set(['cash','mobile_money','bank_transfer','insurance','other']);
 const amountIsValid=value=>((typeof value==='number'&&Number.isFinite(value))||(typeof value==='string'&&value.trim()!==''&&Number.isFinite(Number(value))))&&Number(value)>=0&&Number(value)<=999999999999&&Math.abs(Number(value)*100-Math.round(Number(value)*100))<1e-7;
 const round=value=>Math.round((Number(value)+Number.EPSILON)*100)/100;
 router.use(allowCash);
+router.use(requireCashAccess);
 
 router.get('/',async(req,res,next)=>{
  try{
@@ -45,7 +47,7 @@ router.post('/sessions',async(req,res,next)=>{
  let connection;
  try{
   connection=await db.getConnection();await connection.beginTransaction();
-  await connection.execute('SELECT id FROM organizations WHERE id=? FOR UPDATE',[req.tenantId]);
+  await assertCashAccess(req,connection,{lock:true});
   const [open]=await connection.execute("SELECT id FROM cash_sessions WHERE organization_id=? AND status='open' LIMIT 1 FOR UPDATE",[req.tenantId]);
   if(open.length)throw Object.assign(Error('Une session de caisse est déjà ouverte.'),{status:409});
   const [created]=await connection.execute(
@@ -63,6 +65,7 @@ router.post('/sessions/:id/close',async(req,res,next)=>{
  let connection;
  try{
   connection=await db.getConnection();await connection.beginTransaction();
+  await assertCashAccess(req,connection,{lock:true});
   const [sessions]=await connection.execute(
    "SELECT id,opening_cash FROM cash_sessions WHERE id=? AND organization_id=? AND status='open' FOR UPDATE",
    [req.params.id,req.tenantId]
@@ -89,6 +92,7 @@ router.post('/movements',async(req,res,next)=>{
  let connection;
  try{
   connection=await db.getConnection();await connection.beginTransaction();
+  await assertCashAccess(req,connection,{lock:true});
   const [sessions]=await connection.execute("SELECT id FROM cash_sessions WHERE organization_id=? AND status='open' ORDER BY id DESC LIMIT 1 FOR UPDATE",[req.tenantId]);
   if(!sessions.length)throw Object.assign(Error('Ouvrez une session de caisse avant d’enregistrer un mouvement.'),{status:409});
   const [created]=await connection.execute(

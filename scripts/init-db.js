@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs=require('fs'),path=require('path'),db=require('../src/config/database');
 const {ALL_MODULES,DEFAULT_PLANS}=require('../src/config/pricing');
-const {recordBuiltInMigration}=require('../src/services/database-upgrade.service');
+const {recordBuiltInMigration,verifyBuiltInMigrationSchema}=require('../src/services/database-upgrade.service');
 const columnMigrations=[
  ['users','password_version','INT UNSIGNED NOT NULL DEFAULT 0'],
  ['organization_settings','default_label_format',"VARCHAR(20) NOT NULL DEFAULT 'barcode'"],
@@ -22,10 +22,14 @@ const columnMigrations=[
  ['platform_promotions','new_users_only','BOOLEAN NOT NULL DEFAULT FALSE'],
  ['platform_promotions','plan_id','BIGINT UNSIGNED NULL'],
  ['organization_settings','sales_tax_rate','DECIMAL(5,2) NOT NULL DEFAULT 0'],
+ ['organization_settings','separate_sale_payment','TINYINT(1) NOT NULL DEFAULT 0'],
+ ['sales_invoices','separate_cashier','TINYINT(1) NOT NULL DEFAULT 0'],
  ['organization_settings','patient_code_mode',"ENUM('auto','manual') NOT NULL DEFAULT 'manual'"],
  ['organization_settings','patient_code_format',"VARCHAR(60) NOT NULL DEFAULT 'PAT-{SEQ:5}'"],
  ['organization_settings','patient_code_sequence','BIGINT UNSIGNED NOT NULL DEFAULT 0'],
  ['products','prescription_required','BOOLEAN NOT NULL DEFAULT FALSE'],
+ ['products','purchase_cost','DECIMAL(18,4) NULL'],
+ ['sales_invoice_items','unit_purchase_cost','DECIMAL(18,4) NULL'],
  ['products','max_customer_quantity','DECIMAL(14,3) NULL'],
  ['products','minimum_purchase_interval_hours','INT UNSIGNED NULL'],
  ['plans','plan_type',"ENUM('starter','ultimate','customized','trial') NOT NULL DEFAULT 'customized'"],
@@ -78,6 +82,13 @@ async function ensureForeignKey(table,column,referencedTable,referencedColumn,co
  await ensureForeignKey('organizations','partner_id','platform_partners','id','fk_organization_partner');
  await ensureForeignKey('platform_promotions','plan_id','plans','id','fk_promotion_plan');
  await recordBuiltInMigration(db,'2026110501_promotion_plan_scope');
+ await recordBuiltInMigration(db,'2026110601_product_purchase_cost');
+ await verifyBuiltInMigrationSchema(db,'2026110602_accounting_book');
+ await recordBuiltInMigration(db,'2026110602_accounting_book');
+ await verifyBuiltInMigrationSchema(db,'2026110603_sale_unit_purchase_cost');
+ await recordBuiltInMigration(db,'2026110603_sale_unit_purchase_cost');
+ await verifyBuiltInMigrationSchema(db,'2026110701_separate_sale_payment');
+ await recordBuiltInMigration(db,'2026110701_separate_sale_payment');
  await db.execute(
   `INSERT IGNORE INTO account_email_claims(email,user_id)
    SELECT LOWER(email),MIN(id) FROM users GROUP BY LOWER(email)`

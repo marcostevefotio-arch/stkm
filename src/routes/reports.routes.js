@@ -1,5 +1,7 @@
 const router=require('express').Router();
 const db=require('../config/database');
+const {requireModuleAccess}=require('../middleware/module-access');
+router.use(requireModuleAccess('reports'));
 
 const allowedPeriods=new Set([7,30,90,365]);
 

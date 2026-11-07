@@ -3,6 +3,10 @@ const db=require('../config/database');
 const {audit}=require('../services/audit.service');
 const {requireRole}=require('../middleware/auth');
 const {parseJson}=require('../config/pricing');
+const {hasFeature,requireFeature}=require('../middleware/plan-access');
+const requireFeatureCash=requireFeature('cash');
+const {canSell,canCollect}=require('../../public/js/access-policy');
+const {assertCashAccess,requireCashAccess}=require('../middleware/sale-workflow');
 const allowSales=requireRole('OWNER','ADMIN','PHARMACIST','CASHIER');
 const viewPrescription=requireRole('OWNER','ADMIN','PHARMACIST');
 const paymentMethods=new Set(['cash','mobile_money','bank_transfer','insurance','other']);
@@ -23,7 +27,8 @@ function validatePayments(payments,{allowEmpty=true}={}){
  if(!Array.isArray(payments)||(!allowEmpty&&!payments.length)||payments.length>10)return 'Les paiements doivent contenir de 1 à 10 lignes.';
  for(const payment of payments){
   if(!payment||!paymentMethods.has(payment.method)||!validMoney(payment.amount)||Number(payment.amount)<=0)return 'Un mode ou montant de paiement est invalide.';
-  if(payment.method==='cash'&&payment.cash_received!==undefined&&(!validMoney(payment.cash_received)||Number(payment.cash_received)<Number(payment.amount)))return 'Le montant reçu en espèces doit couvrir le montant encaissé.';
+  if(payment.method==='cash'&&!isNumeric(payment.cash_received))return 'Le montant reçu en espèces est obligatoire.';
+  if(payment.method==='cash'&&(!validMoney(payment.cash_received)||Number(payment.cash_received)<Number(payment.amount)))return 'Le montant reçu en espèces doit couvrir le montant encaissé.';
   if(payment.method==='insurance'&&!validId(payment.insurer_id))return 'Sélectionnez l’assureur pour le paiement par assurance.';
   if(payment.reference!==undefined&&(typeof payment.reference!=='string'||payment.reference.length>190))return 'La référence de paiement est limitée à 190 caractères.';
  }
@@ -85,17 +90,20 @@ async function validateInsurance(connection,tenantId,patientId,insurerId){
 async function addPayments(connection,{tenantId,userId,invoiceId,patientId,totalAmount,payments,session}){
  const [[totals]]=await connection.execute(
   `SELECT COALESCE((SELECT SUM(amount) FROM sales_payments WHERE invoice_id=?),0) paid,
-          COALESCE((SELECT SUM(refund_amount) FROM sales_returns WHERE invoice_id=?),0) refunded,
-          COALESCE((SELECT SUM(ri.refund_amount) FROM sales_return_items ri JOIN sales_returns sr ON sr.id=ri.return_id WHERE sr.invoice_id=?),0) returned_value`,
-  [invoiceId,invoiceId,invoiceId]
+          COALESCE((SELECT SUM(refund_amount) FROM sales_returns WHERE invoice_id=?),0) refunded`,
+  [invoiceId,invoiceId]
  );
- const balance=money(Number(totalAmount)-Number(totals.returned_value)-Number(totals.paid)+Number(totals.refunded));
+ const [[returned]]=await connection.execute(
+  'SELECT COALESCE(SUM(ri.refund_amount),0) returned_value FROM sales_return_items ri JOIN sales_returns sr ON sr.id=ri.return_id WHERE sr.invoice_id=?',
+  [invoiceId]
+ );
+ const balance=money(Number(totalAmount)-Number(returned.returned_value)-Number(totals.paid)+Number(totals.refunded));
  const requested=money(payments.reduce((sum,payment)=>sum+Number(payment.amount),0));
  if(requested>balance+0.001)throw Object.assign(Error('Le total des paiements dépasse le solde de la facture.'),{status:409});
  for(const payment of payments){
   const amount=money(payment.amount);
   if(payment.method==='insurance')await validateInsurance(connection,tenantId,patientId,Number(payment.insurer_id));
-  const received=payment.method==='cash'?money(payment.cash_received===undefined?amount:payment.cash_received):0;
+  const received=payment.method==='cash'?money(payment.cash_received):0;
   const change=payment.method==='cash'?money(received-amount):0;
   await connection.execute(
    `INSERT INTO sales_payments(invoice_id,payment_method,amount,cash_received,cash_change,insurer_id,reference,recorded_by)
@@ -113,15 +121,18 @@ async function refreshInvoiceStatus(connection,invoiceId){
  const [[row]]=await connection.execute(
   `SELECT i.total_amount,
           COALESCE((SELECT SUM(amount) FROM sales_payments WHERE invoice_id=i.id),0) paid,
-          COALESCE((SELECT SUM(refund_amount) FROM sales_returns WHERE invoice_id=i.id),0) refunded,
-          COALESCE((SELECT SUM(ri.refund_amount) FROM sales_return_items ri JOIN sales_returns sr ON sr.id=ri.return_id WHERE sr.invoice_id=i.id),0) returned_value
+          COALESCE((SELECT SUM(refund_amount) FROM sales_returns WHERE invoice_id=i.id),0) refunded
    FROM sales_invoices i WHERE i.id=?`,
   [invoiceId]
  );
- const netPaid=money(Number(row.paid)-Number(row.refunded)),remainingTotal=money(Number(row.total_amount)-Number(row.returned_value));
+ const [[returned]]=await connection.execute(
+  'SELECT COALESCE(SUM(ri.refund_amount),0) returned_value FROM sales_return_items ri JOIN sales_returns sr ON sr.id=ri.return_id WHERE sr.invoice_id=?',
+  [invoiceId]
+ );
+ const netPaid=money(Number(row.paid)-Number(row.refunded)),remainingTotal=money(Number(row.total_amount)-Number(returned.returned_value));
  let status;
  if(remainingTotal<=0)status='returned';
- else if(Number(row.returned_value)>0)status='partially_returned';
+ else if(Number(returned.returned_value)>0)status='partially_returned';
  else if(netPaid<=0)status='issued';
  else if(netPaid+0.001>=remainingTotal)status='paid';
  else status='partially_paid';
@@ -132,11 +143,17 @@ async function createSale(req,res,next){
  const body=req.body||{},validation=validateInvoiceInput(body);
  if(validation)return res.status(400).json({error:validation});
  if(!hasPatientsModule(req.user)&&(body.patient_id||body.payments?.some(payment=>payment.method==='insurance')))return res.status(403).json({error:'La vente à un patient ou par assurance n’est pas comprise dans votre forfait. Enregistrez la vente comme client externe.'});
+ let prescriptionImage;
  try{prescriptionImage=parsePrescriptionImage(body.prescription_image);}catch(error){return res.status(error.status||400).json({error:error.message});}
  let connection;
  try{
   connection=await db.getConnection();await connection.beginTransaction();
-  const session=await findOpenSession(connection,req.tenantId,{lock:true});
+  await connection.execute('SELECT id FROM organizations WHERE id=? FOR UPDATE',[req.tenantId]);
+  const [settings]=await connection.execute('SELECT sales_tax_rate,separate_sale_payment FROM organization_settings WHERE organization_id=? FOR UPDATE',[req.tenantId]);
+  const separate=Boolean(settings[0]?.separate_sale_payment);
+  if(!canSell(req.user,settings[0]))throw Object.assign(Error('Saisie de vente refusée : en mode deux temps, seul le pharmacien ou un administrateur saisit la vente. En mode un temps, les modules Ventes et Caisse sont requis.'),{status:403});
+  if(separate&&body.payments?.length)throw Object.assign(Error('Cette vente doit être encaissée séparément par un autre utilisateur en caisse.'),{status:409});
+  const session=separate?null:await findOpenSession(connection,req.tenantId,{lock:true});
   const patientId=body.patient_id?Number(body.patient_id):null;
   if(patientId){
    const [patients]=await connection.execute('SELECT id,full_name FROM patients WHERE id=? AND organization_id=? AND is_active=1 FOR UPDATE',[patientId,req.tenantId]);
@@ -145,13 +162,12 @@ async function createSale(req,res,next){
   }
   const ids=body.items.map(item=>Number(item.product_id)),placeholders=ids.map(()=>'?').join(',');
   const [products]=await connection.execute(
-   `SELECT id,sku,name,unit,quantity_on_hand,sale_price,prescription_required,max_customer_quantity,minimum_purchase_interval_hours
+   `SELECT id,sku,name,unit,quantity_on_hand,sale_price,purchase_cost,prescription_required,max_customer_quantity,minimum_purchase_interval_hours
     FROM products WHERE organization_id=? AND is_active=1 AND id IN (${placeholders}) ORDER BY id FOR UPDATE`,
    [req.tenantId,...ids]
   );
   if(products.length!==ids.length)throw Object.assign(Error('Un produit est absent ou archivé.'),{status:400});
   const byId=new Map(products.map(product=>[Number(product.id),product]));
-  const [settings]=await connection.execute('SELECT sales_tax_rate FROM organization_settings WHERE organization_id=?',[req.tenantId]);
   const taxRate=Number(settings[0]?.sales_tax_rate||0),prepared=[],flags=[];
   let subtotal=0;
   for(const item of body.items){
@@ -184,11 +200,12 @@ async function createSale(req,res,next){
    if(maximum!==null&&totalQuantity>maximum)flags.push({type:'quantity_limit',product_id:Number(product.id),product_name:product.name,message:`Quantité cumulée à vérifier : ${totalQuantity} ${product.unit}, seuil configuré ${maximum} ${product.unit}${interval>0?` sur ${interval} h`:''}.`});
   }
   const taxAmount=money(prepared.reduce((sum,line)=>sum+line.lineTax,0)),totalAmount=money(subtotal+taxAmount);
+  if(separate&&totalAmount<=0)throw Object.assign(Error('Une vente à encaisser séparément doit avoir un total strictement positif.'),{status:400});
   if(body.payments?.some(payment=>payment.method==='insurance'))await validateInsurance(connection,req.tenantId,patientId,Number(body.payments.find(payment=>payment.method==='insurance').insurer_id));
   const [inserted]=await connection.execute(
-   `INSERT INTO sales_invoices(organization_id,invoice_number,patient_id,patient_name,subtotal,tax_rate,tax_amount,total_amount,review_flags,notes,created_by)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-   [req.tenantId,`TMP-${require('crypto').randomUUID()}`,patientId,body.patient_name||null,subtotal,taxRate,taxAmount,totalAmount,flags.length?JSON.stringify(flags):null,body.notes||null,req.user.id]
+   `INSERT INTO sales_invoices(organization_id,invoice_number,patient_id,patient_name,subtotal,tax_rate,tax_amount,total_amount,review_flags,notes,created_by,separate_cashier)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   [req.tenantId,`TMP-${require('crypto').randomUUID()}`,patientId,body.patient_name||null,subtotal,taxRate,taxAmount,totalAmount,flags.length?JSON.stringify(flags):null,body.notes||null,req.user.id,separate]
   );
   const invoiceId=inserted.insertId,invoiceNumber=`FAC-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${String(invoiceId).padStart(6,'0')}`;
   await connection.execute('UPDATE sales_invoices SET invoice_number=? WHERE id=?',[invoiceNumber,invoiceId]);
@@ -197,10 +214,11 @@ async function createSale(req,res,next){
    [invoiceId,prescriptionImage.mimeType,prescriptionImage.data,req.user.id]
   );
   for(const line of prepared){
+   if(line.product.purchase_cost===undefined)throw Error('Coût d’achat du produit indisponible lors de la vente.');
    await connection.execute(
-    `INSERT INTO sales_invoice_items(invoice_id,product_id,sku,product_name,unit,quantity,unit_price,line_subtotal,line_tax,line_total,prescription_required,prescription_provided)
-     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [invoiceId,line.product.id,line.product.sku,line.product.name,line.product.unit,line.quantity,line.product.sale_price,line.lineSubtotal,line.lineTax,line.lineTotal,line.product.prescription_required,line.prescriptionProvided]
+    `INSERT INTO sales_invoice_items(invoice_id,product_id,sku,product_name,unit,quantity,unit_price,line_subtotal,line_tax,line_total,prescription_required,prescription_provided,unit_purchase_cost)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [invoiceId,line.product.id,line.product.sku,line.product.name,line.product.unit,line.quantity,line.product.sale_price,line.lineSubtotal,line.lineTax,line.lineTotal,line.product.prescription_required,line.prescriptionProvided,line.product.purchase_cost]
    );
    const nextStock=Number(line.product.quantity_on_hand)-line.quantity;
    await connection.execute('UPDATE products SET quantity_on_hand=? WHERE id=? AND organization_id=?',[nextStock,line.product.id,req.tenantId]);
@@ -212,9 +230,10 @@ async function createSale(req,res,next){
   }
   if(body.payments?.length)await addPayments(connection,{tenantId:req.tenantId,userId:req.user.id,invoiceId,patientId,totalAmount,payments:body.payments,session});
   const status=body.payments?.length?await refreshInvoiceStatus(connection,invoiceId):'issued';
+  await connection.execute('INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,details_json) VALUES(?,?,?,?,?,?)',
+   [req.tenantId,req.user.id,'SALE_CREATED','sales_invoice',String(invoiceId),JSON.stringify({invoiceNumber,totalAmount,reviewFlags:flags,separateCashier:separate})]);
   await connection.commit();connection.release();connection=null;
-  await audit({tenantId:req.tenantId,userId:req.user.id,action:'SALE_CREATED',entityType:'sales_invoice',entityId:invoiceId,details:{invoiceNumber,totalAmount,reviewFlags:flags}});
-  res.status(201).json({id:invoiceId,invoice_number:invoiceNumber,subtotal,tax_rate:taxRate,tax_amount:taxAmount,total_amount:totalAmount,status,review_flags:flags,message:'Vente enregistrée et reçu généré.'});
+  res.status(201).json({id:invoiceId,invoice_number:invoiceNumber,subtotal,tax_rate:taxRate,tax_amount:taxAmount,total_amount:totalAmount,status,separate_cashier:separate,review_flags:flags,message:separate?'Vente enregistrée, en attente d’encaissement par un autre utilisateur.':'Vente enregistrée et reçu généré.'});
  }catch(error){if(connection){await connection.rollback();connection.release();}if(error.status)return res.status(error.status).json({error:error.message});next(error);}
 }
 
@@ -228,6 +247,28 @@ router.get('/',async(req,res,next)=>{
     FROM sales_invoices i WHERE i.organization_id=? ORDER BY i.created_at DESC LIMIT 500`,
    [req.tenantId]
   );
+  res.json(rows);
+ }catch(error){next(error);}
+});
+router.get('/products',async(req,res,next)=>{
+ try{
+  const [rows]=await db.execute(
+   `SELECT id,sku,name,unit,quantity_on_hand,sale_price,barcode,prescription_required,max_customer_quantity,minimum_purchase_interval_hours
+    FROM products WHERE organization_id=? AND is_active=1 ORDER BY name`,[req.tenantId]);
+  res.json(rows);
+ }catch(error){next(error);}
+});
+router.get('/patients',async(req,res,next)=>{
+ if(!hasPatientsModule(req.user))return res.status(403).json({error:'Cette fonctionnalité n’est pas comprise dans votre forfait.'});
+ try{
+  const [rows]=await db.execute('SELECT id,patient_code,full_name FROM patients WHERE organization_id=? AND is_active=1 ORDER BY full_name',[req.tenantId]);
+  res.json(rows);
+ }catch(error){next(error);}
+});
+router.get('/insurers',async(req,res,next)=>{
+ if(!hasPatientsModule(req.user))return res.status(403).json({error:'Cette fonctionnalité n’est pas comprise dans votre forfait.'});
+ try{
+  const [rows]=await db.execute('SELECT id,name FROM insurers WHERE organization_id=? AND is_active=1 ORDER BY name',[req.tenantId]);
   res.json(rows);
  }catch(error){next(error);}
 });
@@ -248,6 +289,27 @@ router.get('/patients/:patientId/insurers',async(req,res,next)=>{
   res.json(rows);
  }catch(error){next(error);}
 });
+router.get('/pending',requireFeatureCash,requireCashAccess,async(req,res,next)=>{
+ const offset=req.query.offset===undefined?0:Number(req.query.offset);
+ if(!Number.isSafeInteger(offset)||offset<0||offset>1000000)return res.status(400).json({error:'Page de caisse invalide.'});
+ if(!canCollect(req.user,{separate_sale_payment:1}))return res.json([]);
+ try{
+  const [rows]=await db.execute(
+   `SELECT i.id,i.invoice_number,i.patient_name,i.total_amount,i.status,i.created_at,u.full_name seller_name,
+    COALESCE((SELECT SUM(p.amount) FROM sales_payments p WHERE p.invoice_id=i.id),0) paid_amount,
+    COALESCE((SELECT SUM(r.refund_amount) FROM sales_returns r WHERE r.invoice_id=i.id),0) refunded_amount,
+    COALESCE((SELECT SUM(ri.refund_amount) FROM sales_return_items ri JOIN sales_returns sr ON sr.id=ri.return_id WHERE sr.invoice_id=i.id),0) returned_value
+    FROM sales_invoices i JOIN users u ON u.id=i.created_by
+    WHERE i.organization_id=? AND i.separate_cashier=1 AND i.created_by<>?
+      AND i.status IN ('issued','partially_paid','partially_returned')
+      AND i.total_amount-COALESCE((SELECT SUM(ri.refund_amount) FROM sales_return_items ri JOIN sales_returns sr ON sr.id=ri.return_id WHERE sr.invoice_id=i.id),0)
+        -COALESCE((SELECT SUM(p.amount) FROM sales_payments p WHERE p.invoice_id=i.id),0)
+        +COALESCE((SELECT SUM(r.refund_amount) FROM sales_returns r WHERE r.invoice_id=i.id),0)>0
+    ORDER BY i.created_at,i.id LIMIT 101 OFFSET ?`,[req.tenantId,req.user.id,offset]
+  );
+  res.json(rows);
+ }catch(error){next(error);}
+});
 router.post('/',createSale);
 router.get('/:id',async(req,res,next)=>{
  try{
@@ -259,7 +321,11 @@ router.get('/:id',async(req,res,next)=>{
    [req.params.id,req.tenantId]
   );
   if(!invoices.length)return res.status(404).json({error:'Facture introuvable.'});
-  const [items]=await db.execute('SELECT * FROM sales_invoice_items WHERE invoice_id=? ORDER BY id',[req.params.id]);
+  const [[returned]]=await db.execute(
+   'SELECT COALESCE(SUM(ri.refund_amount),0) returned_value FROM sales_return_items ri JOIN sales_returns sr ON sr.id=ri.return_id WHERE sr.invoice_id=?',
+   [req.params.id]
+  );
+  const [items]=await db.execute('SELECT id,invoice_id,product_id,sku,product_name,unit,quantity,returned_quantity,unit_price,line_subtotal,line_tax,line_total,prescription_required,prescription_provided,created_at FROM sales_invoice_items WHERE invoice_id=? ORDER BY id',[req.params.id]);
   const [payments]=await db.execute(
    `SELECT p.id,p.payment_method,p.amount,p.cash_received,p.cash_change,p.insurer_id,p.reference,p.created_at,i.name insurer_name
     FROM sales_payments p LEFT JOIN insurers i ON i.id=p.insurer_id WHERE p.invoice_id=? ORDER BY p.id`,
@@ -272,7 +338,7 @@ router.get('/:id',async(req,res,next)=>{
     FROM sales_returns r LEFT JOIN insurers i ON i.id=r.insurer_id WHERE r.invoice_id=? ORDER BY r.id DESC`,
    [req.params.id]
   );
-  res.json({...invoices[0],items,payments,returns});
+  res.json({...invoices[0],returned_value:returned.returned_value,items,payments,returns});
  }catch(error){next(error);}
 });
 router.get('/:id/prescription',viewPrescription,async(req,res,next)=>{
@@ -295,14 +361,21 @@ router.post('/:id/payments',async(req,res,next)=>{
  let connection;
  try{
   connection=await db.getConnection();await connection.beginTransaction();
-  const [rows]=await connection.execute('SELECT id,patient_id,total_amount,status FROM sales_invoices WHERE id=? AND organization_id=? FOR UPDATE',[req.params.id,req.tenantId]);
+  await assertCashAccess(req,connection,{lock:true});
+  const [rows]=await connection.execute('SELECT id,patient_id,total_amount,status,created_by,separate_cashier FROM sales_invoices WHERE id=? AND organization_id=? FOR UPDATE',[req.params.id,req.tenantId]);
   if(!rows.length)throw Object.assign(Error('Facture introuvable.'),{status:404});
   if(rows[0].status==='cancelled'||rows[0].status==='returned')throw Object.assign(Error('Cette facture ne peut plus recevoir de paiement.'),{status:409});
+  if(rows[0].separate_cashier){
+   if(!canCollect(req.user,{separate_sale_payment:1}))throw Object.assign(Error('Cette vente préparée doit être encaissée par un caissier ou un administrateur.'),{status:403});
+   if(String(rows[0].created_by)===String(req.user.id))throw Object.assign(Error('Le vendeur ne peut pas encaisser sa propre vente. Un autre utilisateur doit intervenir.'),{status:403});
+   if(!hasFeature(req.user,'cash'))throw Object.assign(Error('La fonctionnalité caisse n’est pas comprise dans votre forfait.'),{status:403});
+  }
   const session=await findOpenSession(connection,req.tenantId,{lock:true});
   await addPayments(connection,{tenantId:req.tenantId,userId:req.user.id,invoiceId:rows[0].id,patientId:rows[0].patient_id,totalAmount:Number(rows[0].total_amount),payments,session});
   const status=await refreshInvoiceStatus(connection,rows[0].id);
+  await connection.execute('INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,details_json) VALUES(?,?,?,?,?,?)',
+   [req.tenantId,req.user.id,'SALE_PAYMENT_RECORDED','sales_invoice',String(req.params.id),JSON.stringify({status})]);
   await connection.commit();connection.release();connection=null;
-  await audit({tenantId:req.tenantId,userId:req.user.id,action:'SALE_PAYMENT_RECORDED',entityType:'sales_invoice',entityId:req.params.id});
   res.json({message:'Paiement enregistré.',status});
  }catch(error){if(connection){await connection.rollback();connection.release();}if(error.status)return res.status(error.status).json({error:error.message});next(error);}
 });
@@ -316,6 +389,7 @@ router.post('/:id/returns',async(req,res,next)=>{
  let connection;
  try{
   connection=await db.getConnection();await connection.beginTransaction();
+  await assertCashAccess(req,connection,{lock:true});
   const [invoices]=await connection.execute('SELECT id,invoice_number,total_amount,status FROM sales_invoices WHERE id=? AND organization_id=? FOR UPDATE',[req.params.id,req.tenantId]);
   if(!invoices.length)throw Object.assign(Error('Facture introuvable.'),{status:404});
   if(invoices[0].status==='cancelled'||invoices[0].status==='returned')throw Object.assign(Error('Cette facture ne peut plus être retournée.'),{status:409});
@@ -368,7 +442,7 @@ router.post('/:id/returns',async(req,res,next)=>{
    await connection.execute('INSERT INTO sales_return_items(return_id,invoice_item_id,quantity,refund_amount,restocked) VALUES(?,?,?,?,?)',[inserted.insertId,line.item.id,line.quantity,line.itemRefund,line.restocked]);
    await connection.execute('UPDATE sales_invoice_items SET returned_quantity=? WHERE id=?',[line.newReturned,line.item.id]);
    if(line.restocked){
-    await connection.execute('UPDATE products SET quantity_on_hand=quantity_on_hand+? WHERE id=? AND organization_id=?',[line.quantity,line.item.product_id,req.tenantId]);
+    await connection.execute('UPDATE products SET quantity_on_hand=quantity_on_hand+?,purchase_cost=NULL WHERE id=? AND organization_id=?',[line.quantity,line.item.product_id,req.tenantId]);
     await connection.execute(
      `INSERT INTO stock_movements(organization_id,product_id,user_id,movement_type,quantity,reference,notes)
       VALUES(?,?,?,'IN',?,?,?)`,
@@ -400,7 +474,7 @@ router.post('/:id/cancel',async(req,res,next)=>{
   if(payments.length)throw Object.assign(Error('Une facture encaissée doit être corrigée par un retour, pas annulée.'),{status:409});
   const [items]=await connection.execute('SELECT product_id,quantity FROM sales_invoice_items WHERE invoice_id=? FOR UPDATE',[req.params.id]);
   for(const item of items){
-   await connection.execute('UPDATE products SET quantity_on_hand=quantity_on_hand+? WHERE id=? AND organization_id=?',[item.quantity,item.product_id,req.tenantId]);
+   await connection.execute('UPDATE products SET quantity_on_hand=quantity_on_hand+?,purchase_cost=NULL WHERE id=? AND organization_id=?',[item.quantity,item.product_id,req.tenantId]);
    await connection.execute(
     `INSERT INTO stock_movements(organization_id,product_id,user_id,movement_type,quantity,reference,notes)
      VALUES(?,?,?,'IN',?,?,?)`,

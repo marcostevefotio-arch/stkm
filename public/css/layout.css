@@ -73,6 +73,13 @@
 .medical-history-form-overlay{z-index:7}
 .inline-check{display:flex;flex-direction:row;align-items:center;gap:8px}
 .inline-check input{width:auto}
+.accounting-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px}
+.accounting-row{min-width:0;margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px}
+.accounting-row legend{font-weight:700}
+.accounting-warning{padding:10px;border-left:3px solid var(--accent);background:#fff8e9;line-height:1.5}
+.accounting-entry{margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:8px}
+.accounting-entry summary{cursor:pointer;overflow-wrap:anywhere}
+@media(max-width:650px){.accounting-grid{grid-template-columns:minmax(0,1fr)}}
 .sale-tenders{display:grid;gap:10px}
 .sale-tender-row{padding:10px;border:1px solid var(--line);border-radius:8px;background:#fbfdfc}
 .sale-tender-row .two{gap:8px}
@@ -327,6 +334,13 @@ body,button,input,select,textarea{font-family:"Lato",Poppins,sans-serif}
 .modal .inline-check{margin-bottom:14px}
 .modal .inline-check input{width:16px;height:16px;padding:0;margin:0;accent-color:var(--primary)}
 .modal .notification-empty{padding:0;margin:0 0 16px}
+.product-form{width:min(760px,100%)}
+.product-form fieldset{min-width:0;margin:0 0 18px;padding:16px;border:1px solid var(--line);border-radius:9px}
+.product-form legend{padding:0 7px;font-weight:700;color:var(--primary)}
+.product-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px}
+.product-form-grid label{min-width:0}
+.product-form-help{margin:0 0 12px;color:var(--muted);font-size:11px;font-weight:400;line-height:1.5}
+@media(max-width:650px){.product-form-grid{grid-template-columns:minmax(0,1fr)}}
 .required-mark{color:var(--danger,#c45b52);font-weight:700}
 .sale-customer{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}
 @media(max-width:650px){.sale-customer{grid-template-columns:1fr}}

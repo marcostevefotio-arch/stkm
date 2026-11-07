@@ -22,7 +22,14 @@ async function authenticate(req,res,next){
   if(!r.length||!r[0].is_active)return res.status(401).json({error:'Compte inactif.'});
   if(r[0].role!=='SUPER_ADMIN'&&r[0].organization_status&&r[0].organization_status!=='active')return res.status(403).json({error:'L’établissement est suspendu ou fermé. Contactez l’assistance REDAMS.'});
   if(Number(p.pv||0)!==Number(r[0].password_version||0))return res.status(401).json({error:'Mot de passe modifié. Reconnectez-vous.'});
-  req.user=r[0];req.tenantId=Number(r[0].organization_id);next();
+  req.user=r[0];req.tenantId=Number(r[0].organization_id);
+  if(req.user.role==='ACCOUNTANT'){
+   const path=(req.originalUrl||'').split('?')[0];
+   const accounting=path==='/api/accounting'||path.startsWith('/api/accounting/');
+   const self=(path==='/api/auth/me'&&req.method==='GET')||(path==='/api/auth/password'&&req.method==='PUT');
+   if(!accounting&&!self)return res.status(403).json({error:'Ce compte est limité à la comptabilité.'});
+  }
+  next();
  }catch(error){next(error);}
 }
 const requireRole=(...roles)=>(req,res,next)=>roles.includes(req.user?.role)?next():res.status(403).json({error:'Permission insuffisante.'});

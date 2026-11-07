@@ -11,6 +11,16 @@
         try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; }
         catch { return []; }
     }
+    const canAccessPage = page => window.RedamsAccess.canAccessPage(state.profile, state.settings, page);
+    function refreshAccess() {
+        document.querySelectorAll('.sidebar [data-page]').forEach(link => { link.hidden = !canAccessPage(link.dataset.page); });
+        document.querySelectorAll('.sidebar nav details').forEach(group => {
+            group.hidden = ![...group.querySelectorAll('[data-page]')].some(link => !link.hidden);
+        });
+        document.querySelectorAll('[data-go]').forEach(button => { button.hidden = !canAccessPage(button.dataset.go); });
+        $('#global-search-form').hidden = !['stock', 'procurement', 'patients'].some(feature => window.RedamsAccess.canAccessModule(state.profile, feature));
+        document.querySelector('.sidebar nav').hidden = false;
+    }
     function dateInputValue(value) {
         if (!value) return '';
         if (value instanceof Date && !Number.isNaN(value.getTime())) return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
@@ -36,6 +46,31 @@
         try {
             const me = await api('/api/auth/me');
             $('#tenant').textContent = me.user.organization_name; $('#user').textContent = me.user.full_name + ' · ' + me.user.role;
+            if (me.user.role === 'ACCOUNTANT') {
+                state.role = me.user.role; state.userId = Number(me.user.id); state.profile = me.user;
+                state.modules = parseModuleList(me.user.subscription_modules);
+                state.canAdminister = false; state.canAccounting = true;
+                document.querySelectorAll('.sidebar nav > a, .sidebar nav > details').forEach(item => { item.hidden = !item.hasAttribute('data-accounting-nav'); });
+                document.querySelector('[data-accounting-nav]').hidden = false;
+                const securityLink = document.createElement('a');
+                securityLink.dataset.page = 'security'; securityLink.textContent = 'Changer mon mot de passe';
+                document.querySelector('.sidebar nav').append(securityLink);
+                refreshAccess();
+                $('#global-search-form').hidden = true;
+                document.querySelector('.alert-wrap').hidden = true;
+                document.querySelector('.notification-wrap').hidden = true;
+                document.querySelector('[data-user-action="profile"]').hidden = true;
+                document.querySelectorAll('[data-admin-only]').forEach(item => { item.hidden = true; });
+                $('#plan').textContent = 'Accès comptable'; $('#period').textContent = '';
+                try {
+                    state.settings = await api('/api/accounting/context');
+                    const hash = location.hash.slice(1);
+                    go(hash === 'settings/security' ? 'security' : Object.hasOwn(accountingPages, hash) ? hash : 'accounting-results');
+                } catch (error) {
+                    $('#content').innerHTML = `<section class="panel"><p class="error" role="alert">${esc(error.message)}</p></section>`;
+                }
+                return;
+            }
             const [settingsData, subscription] = await Promise.all([api('/api/settings'), api('/api/subscription')]);
             state.settings = settingsData;
             if (settingsData.primary_color) document.documentElement.style.setProperty('--primary', settingsData.primary_color);
@@ -48,29 +83,56 @@
             state.role = role; state.userId = Number(me.user.id);
             state.modules = parseModuleList(me.user.subscription_modules);
             state.canAdminister = ['OWNER', 'ADMIN'].includes(role);
+            state.canAccounting = state.canAdminister;
+            document.querySelector('[data-accounting-nav]').hidden = !state.canAdminister || (state.modules !== null && !state.modules.includes('reports'));
             state.profile = me.user;
             document.querySelectorAll('[data-admin-only]').forEach(item => { item.hidden = !['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(role); });
             loadAlerts();
             state.canSendNotifications = state.canAdminister;
             state.canAccessPatientRecords = ['OWNER', 'ADMIN', 'PHARMACIST'].includes(role);
             state.canOperateSales = ['OWNER', 'ADMIN', 'PHARMACIST', 'CASHIER'].includes(role);
-            document.querySelectorAll('[data-page="pos"],[data-page="invoices"],[data-page="cash"]').forEach(link => link.hidden = !state.canOperateSales);
-            document.querySelectorAll('[data-page="users"],[data-page="audit"]').forEach(link => link.hidden = !state.canAdminister);
-            document.querySelectorAll('[data-page="patients"],[data-page="insurers"]').forEach(link => link.hidden = !state.canAccessPatientRecords);
-            const modulePages = { stock: ['products', 'movements', 'alerts', 'codes'], procurement: ['suppliers', 'purchases'], sales: ['pos', 'invoices'], cash: ['cash'], patients: ['patients', 'insurers'], reports: ['reports'], administration: ['audit'] };
-            for (const [feature, pages] of Object.entries(modulePages)) {
-                if (state.modules && !state.modules.includes(feature)) pages.forEach(page => document.querySelectorAll(`[data-page="${page}"]`).forEach(link => { link.hidden = true; }));
+            if (!state.canAdminister) {
+                const securityLink = document.createElement('a');
+                securityLink.dataset.page = 'security'; securityLink.textContent = 'Changer mon mot de passe';
+                document.querySelector('.sidebar nav').append(securityLink);
             }
+            refreshAccess();
             $('#notification-compose').hidden = !state.canSendNotifications;
             const hash = location.hash.slice(1);
-            if (hash.startsWith('settings/')) go(hash.slice('settings/'.length)); else if (hash) go(hash); else go('dashboard');
+            if (hash) go(hash); else go('dashboard');
             await refreshNotifications();
         } catch (error) { toast(error.message, 'error'); }
     }
     const dashboardTemplate = $('#content').innerHTML;
+    const accountingPages = {
+        'accounting-results': 'État des résultats',
+        'accounting-balance': 'Bilan comptable',
+        'accounting-journal': 'Journal comptable',
+        'accounting-ledger': 'Grand livre général',
+        'accounting-cashflow': 'Tableau de flux de trésorerie',
+        'accounting-tax': 'Rapport de taxes',
+        'accounting-review': 'Révision comptable'
+    };
+    let accountingLoader;
+    function loadAccounting() {
+        if (!accountingLoader) accountingLoader = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = '/js/accounting.js';
+            script.onload = () => resolve(window.RedamsAccounting);
+            script.onerror = () => { accountingLoader = null; script.remove(); reject(Error('Impossible de charger le module comptable.')); };
+            document.head.append(script);
+        });
+        return accountingLoader;
+    }
     async function dashboard() {
         const root = $('#content');
+        if (!canAccessPage('products')) {
+            root.innerHTML = `<div class="panel"><h3>Bienvenue, ${esc(state.profile.full_name)}</h3><p>Accédez aux modules autorisés pour votre rôle.</p><div class="quick">${[['pos', 'Nouvelle vente'], ['invoices', 'Factures & reçus'], ['cash', 'Recettes & caisse'], ['patients', 'Dossiers patients'], ['help', 'Assistance']].filter(([page]) => canAccessPage(page)).map(([page, label]) => `<button type="button" data-go="${page}">${label}</button>`).join('')}</div></div>`;
+            state.products = [];
+            return;
+        }
         if (!root.querySelector('#productsCount')) root.innerHTML = dashboardTemplate;
+        refreshAccess();
         $('#date').textContent = new Date().toLocaleDateString('fr-FR', { dateStyle: 'long' });
         const d = await api('/api/dashboard');
         if (!root.isConnected || !root.querySelector('#productsCount')) return;
@@ -123,6 +185,36 @@
     }
     function go(page, query = '') {
         closeOpenModals();
+        const settingsPage = page.startsWith('settings/');
+        const accessPage = page.startsWith('global-search') ? 'global-search' : settingsPage && page !== 'settings/patients' ? page.slice('settings/'.length) : page;
+        if (!canAccessPage(accessPage)) {
+            toast('Vous n’avez pas accès à ce module.', 'error');
+            page = state.role === 'ACCOUNTANT' ? 'accounting-results' : 'dashboard';
+        } else if (settingsPage) {
+            page = page.slice('settings/'.length);
+        }
+        if (state.role === 'ACCOUNTANT' && page !== 'security' && !Object.hasOwn(accountingPages, page)) {
+            toast('Ce compte est limité à la comptabilité.', 'error');
+            return;
+        }
+        if (Object.hasOwn(accountingPages, page)) {
+            if (state.modules !== null && !state.modules.includes('reports')) { toast('Cette fonctionnalité n’est pas comprise dans votre forfait.', 'error'); page = 'dashboard'; }
+            else if (!state.canAccounting) { toast('Accès réservé aux administrateurs et experts comptables de l’établissement.', 'error'); page = 'dashboard'; }
+            else {
+                document.querySelectorAll('[data-page]').forEach(link => { const active = link.dataset.page === page; link.classList.toggle('active', active); if (active) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current'); });
+                document.querySelector('[data-accounting-nav]').open = true;
+                $('#title').textContent = accountingPages[page];
+                location.hash = page;
+                if (['accounting-results', 'accounting-balance', 'accounting-journal', 'accounting-ledger', 'accounting-cashflow', 'accounting-tax', 'accounting-review'].includes(page)) {
+                    $('#content').innerHTML = '<section class="panel"><p>Chargement…</p></section>';
+                    loadAccounting().then(render => { if (location.hash === `#${page}`) return (page === 'accounting-balance' ? render.balance : page === 'accounting-journal' ? render.journal : page === 'accounting-ledger' ? render.ledger : page === 'accounting-cashflow' ? render.cashflow : page === 'accounting-tax' ? render.tax : page === 'accounting-review' ? render.review : render)($('#content'), api, esc, state.settings.currency || 'XAF', state.role); })
+                        .catch(error => { if (location.hash === `#${page}`) $('#content').innerHTML = `<section class="panel"><p class="error" role="alert">${esc(error.message)}</p></section>`; });
+                    return;
+                }
+                $('#content').innerHTML = `<section class="panel"><h3>${esc(accountingPages[page])}</h3><p>Ce sous-module comptable n’est pas encore disponible. Aucun état financier ou fiscal ne peut être produit pour le moment.</p><p>La mise en place nécessite notamment un plan de comptes, des écritures équilibrées, des soldes d’ouverture et la clôture des périodes.</p></section>`;
+                return;
+            }
+        }
         const pageFeatures = { products: 'stock', movements: 'stock', alerts: 'stock', codes: 'stock', suppliers: 'procurement', purchases: 'procurement', pos: 'sales', invoices: 'sales', cash: 'cash', patients: 'patients', insurers: 'patients', reports: 'reports', audit: 'administration' };
         if (state.modules && pageFeatures[page] && !state.modules.includes(pageFeatures[page])) {
             toast('Cette fonctionnalité n’est pas comprise dans votre forfait.', 'error');
@@ -139,8 +231,8 @@
             document.querySelectorAll('[data-page]').forEach(link => { link.classList.remove('active'); link.removeAttribute('aria-current'); });
             $('#title').textContent = 'Recherche générale'; $('#global-search-input').value = searchTerm; location.hash = searchTerm ? `global-search?q=${encodeURIComponent(searchTerm)}` : 'global-search'; searchPage($('#content'), searchTerm); return;
         }
-        const settingsTabs = ['settings', 'tax', 'patients', 'backup', 'security', 'codes', 'search'];
-        if (settingsTabs.includes(page)) { const activeTab = page === 'settings' ? 'general' : page; document.querySelectorAll('[data-page]').forEach(a => { const active = a.dataset.page === 'settings'; a.classList.toggle('active', active); if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }); $('#title').textContent = 'Paramètres'; location.hash = page === 'settings' ? 'settings' : `settings/${page}`; settings($('#content'), activeTab); return; }
+        const settingsTabs = ['settings', 'tax', 'workflow', 'backup', 'security', 'codes', 'search'];
+        if (settingsTabs.includes(page) || (settingsPage && page === 'patients')) { const activeTab = page === 'settings' ? 'general' : page; document.querySelectorAll('[data-page]').forEach(a => { const active = a.dataset.page === 'settings' || (page === 'security' && a.dataset.page === 'security'); a.classList.toggle('active', active); if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }); $('#title').textContent = 'Paramètres'; location.hash = page === 'settings' ? 'settings' : `settings/${page}`; settings($('#content'), activeTab); return; }
         if (page === 'insurers' || page.startsWith('insurers/')) {
             const activeTab = page === 'insurers/coverages' ? 'coverages' : 'organizations';
             document.querySelectorAll('[data-page]').forEach(a => { const active = a.dataset.page === 'insurers'; a.classList.toggle('active', active); if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -151,7 +243,7 @@
         document.querySelectorAll('.sidebar nav details').forEach(group => { if (group.querySelector(`[data-page="${page}"]`)) group.open = true; });
         $('#title').textContent = titles[page] || page; location.hash = page; const root = $('#content'); if (page === 'dashboard') dashboard(); else if (page === 'products') products(root); else if (page === 'movements') movements(root); else if (page === 'alerts') alerts(root); else if (page === 'suppliers') suppliers(root); else if (page === 'purchases') purchases(root); else if (page === 'patients') patients(root); else if (page === 'insurers') insurers(root); else if (page === 'pos') salesPOS(root); else if (page === 'invoices') salesInvoices(root); else if (page === 'cash') cashRegister(root); else if (page === 'reports') reports(root); else if (page === 'users' || page === 'audit') adminModule(root, page); else if (page === 'help') support(root); else if (page === 'platform') platformModule(root); else placeholder(root, page);
     }
-    const adminRoleLabels = { OWNER: 'Propriétaire', ADMIN: 'Administrateur', PHARMACIST: 'Pharmacien', STOREKEEPER: 'Gestionnaire de stock', CASHIER: 'Caissier', VIEWER: 'Consultation seule' };
+    const adminRoleLabels = { OWNER: 'Propriétaire', ADMIN: 'Administrateur', PHARMACIST: 'Pharmacien', STOREKEEPER: 'Gestionnaire de stock', CASHIER: 'Caissier', VIEWER: 'Consultation seule', ACCOUNTANT: 'Expert-comptable' };
     async function adminModule(root, activeTab = 'users') {
         if (!state.canAdminister) { root.innerHTML = '<div class="panel"><h3>Accès réservé</h3><p class="error">Cette section est accessible aux propriétaires et administrateurs de l’établissement.</p></div>'; return; }
         root.innerHTML = `<div class="settings-page"><div class="settings-tabs" role="tablist" aria-label="Administration"><button type="button" class="settings-tab${activeTab === 'users' ? ' active' : ''}" id="admin-tab-users" role="tab" aria-selected="${activeTab === 'users'}" aria-controls="admin-panel-users" data-admin-tab="users">Utilisateurs & rôles</button><button type="button" class="settings-tab${activeTab === 'profiles' ? ' active' : ''}" id="admin-tab-profiles" role="tab" aria-selected="${activeTab === 'profiles'}" aria-controls="admin-panel-profiles" data-admin-tab="profiles">Profils d’accès</button><button type="button" class="settings-tab${activeTab === 'audit' ? ' active' : ''}" id="admin-tab-audit" role="tab" aria-selected="${activeTab === 'audit'}" aria-controls="admin-panel-audit" data-admin-tab="audit">Journal d’activité</button></div><section id="admin-panel-${activeTab}" role="tabpanel" aria-labelledby="admin-tab-${activeTab}"></section></div>`;
@@ -173,7 +265,7 @@
         await renderUsers(panel);
     }
     function renderAccessProfiles(panel) {
-        panel.innerHTML = `<div class="panel admin-role-guide"><h3>Profils d’accès</h3><div class="admin-role-grid">${[['OWNER', 'Propriétaire — accès complet et gestion des administrateurs.'], ['ADMIN', 'Administrateur — gestion opérationnelle et des comptes non privilégiés.'], ['PHARMACIST', 'Pharmacien — ventes, patients et antécédents médicaux.'], ['STOREKEEPER', 'Gestionnaire de stock — produits, mouvements et approvisionnements.'], ['CASHIER', 'Caissier — ventes et opérations de caisse.'], ['VIEWER', 'Consultation seule — aucune opération métier autorisée.']].map(([role, description]) => `<article><b>${adminRoleLabels[role]}</b><p>${description}</p></article>`).join('')}</div><p class="admin-security-note">Un compte propriétaire ou administrateur ne peut être modifié que par un propriétaire. Le dernier propriétaire actif ne peut pas être désactivé. Les comptes sont désactivés et conservés dans le journal, jamais supprimés.</p></div>`;
+        panel.innerHTML = `<div class="panel admin-role-guide"><h3>Profils d’accès</h3><div class="admin-role-grid">${[['OWNER', 'Propriétaire — accès complet et gestion des administrateurs.'], ['ADMIN', 'Administrateur — gestion opérationnelle et des comptes non privilégiés.'], ['PHARMACIST', 'Pharmacien — ventes, patients et antécédents médicaux.'], ['STOREKEEPER', 'Gestionnaire de stock — produits, mouvements et approvisionnements.'], ['CASHIER', 'Caissier — ventes et opérations de caisse.'], ['VIEWER', 'Consultation seule — aucune opération métier autorisée.'], ['ACCOUNTANT', 'Expert-comptable — accès à la comptabilité de cet établissement et à son mot de passe. Les rapports restent expérimentaux.']].map(([role, description]) => `<article><b>${adminRoleLabels[role]}</b><p>${description}</p></article>`).join('')}</div><p class="admin-security-note">Un compte propriétaire ou administrateur ne peut être modifié que par un propriétaire. Le dernier propriétaire actif ne peut pas être désactivé. Les comptes sont désactivés et conservés dans le journal, jamais supprimés.</p></div>`;
     }
     async function renderUsers(panel) {
         panel.innerHTML = '<div class="panel"><p class="notification-empty">Chargement des utilisateurs…</p></div>';
@@ -220,7 +312,7 @@
             const password = form.elements.password.value; if (password) body.password = password;
             try {
                 const result = user ? await api(`/api/admin/users/${encodeURIComponent(user.id)}`, { method: 'PATCH', body: JSON.stringify(body) }) : await api('/api/admin/users', { method: 'POST', body: JSON.stringify(body) });
-                close(); toast(result.message); await refresh();
+                close(); toast(result.message); await refresh(panel);
             } catch (reason) { error.textContent = reason.message; toast(reason.message, 'error'); }
         };
         form.elements.full_name.focus();
@@ -1158,7 +1250,7 @@
     }
     async function products(root) {
         try {
-            state.products = await api('/api/products'); root.innerHTML = `<div class="panel"><div class="panel-head"><div><h3>Catalogue des produits</h3><p>Références de ton établissement · le stock se modifie via un mouvement.</p></div><div><button class="table-action" type="button" data-product-labels>Codes produits · Imprimer en lot</button><button class="btn" id="add">＋ Nouveau produit</button></div></div><div data-products-table></div></div>`;
+            state.products = await api('/api/products'); root.innerHTML = `<div class="panel"><div class="panel-head"><div><h3>Catalogue des produits</h3><p>Stock géré par mouvements · estimations HT aux prix actuels, hors frais et non comptables.</p></div><div><button class="table-action" type="button" data-product-labels>Codes produits · Imprimer en lot</button><button class="btn" id="add">＋ Nouveau produit</button></div></div><div data-products-table></div></div>`;
             const categories = [...new Set(state.products.map(product => product.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
             mountDataTable(root.querySelector('[data-products-table]'), {
                 rows: state.products.map(product => ({ ...product, searchText: [product.sku, product.name, product.category, product.barcode, product.unit].join(' ') })), searchText: 'Rechercher par nom, SKU, catégorie ou code-barres…', filters: [{ label: 'Catégorie', options: categories.map(category => ({ value: category, label: category })), value: product => product.category || '' }, { label: 'Stock', options: [{ value: 'low', label: 'Sous le seuil' }, { value: 'available', label: 'Stock disponible' }], value: product => Number(product.quantity_on_hand) <= Number(product.reorder_level) ? 'low' : 'available' }], columns: [
@@ -1167,7 +1259,11 @@
                     { label: 'Catégorie', sortValue: product => product.category || '', render: product => esc(product.category || '—') },
                     { label: 'Stock', sortValue: product => Number(product.quantity_on_hand), render: product => `${esc(product.quantity_on_hand)} ${esc(product.unit)}` },
                     { label: 'Seuil', sortValue: product => Number(product.reorder_level), render: product => esc(product.reorder_level) },
-                    { label: 'Prix HT', sortValue: product => Number(product.sale_price), render: product => `${esc(product.sale_price)} ${esc(state.settings.currency || 'XAF')}` },
+                    { label: 'Coût moyen HT', sortValue: product => product.purchase_cost === null ? -1 : Number(product.purchase_cost), render: product => product.purchase_cost === null ? 'Inconnu' : `${esc(product.purchase_cost)} ${esc(state.settings.currency || 'XAF')}` },
+                    { label: 'Prix de vente HT', sortValue: product => Number(product.sale_price), render: product => `${esc(product.sale_price)} ${esc(state.settings.currency || 'XAF')}` },
+                    { label: 'Écart unitaire estimé', sortValue: product => product.purchase_cost === null ? -Infinity : Number(product.sale_price) - Number(product.purchase_cost), render: product => product.purchase_cost === null ? 'Inconnu' : `${(Number(product.sale_price) - Number(product.purchase_cost)).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${esc(state.settings.currency || 'XAF')}` },
+                    { label: 'Ventes potentielles du stock', sortValue: product => Number(product.sale_price) * Number(product.quantity_on_hand), render: product => formatMoney(Number(product.sale_price) * Number(product.quantity_on_hand)) },
+                    { label: 'Marge stock estimée', sortValue: product => product.purchase_cost === null ? -Infinity : (Number(product.sale_price) - Number(product.purchase_cost)) * Number(product.quantity_on_hand), render: product => product.purchase_cost === null ? 'Inconnu' : formatMoney((Number(product.sale_price) - Number(product.purchase_cost)) * Number(product.quantity_on_hand)) },
                     { label: 'Actions', render: product => `<button class="table-action" type="button" data-product-label="${esc(product.id)}">Codes</button><button class="table-action" type="button" data-edit-product="${esc(product.id)}">Modifier</button><button class="table-action danger" type="button" data-archive-product="${esc(product.id)}">Archiver</button>` }
                 ]
             });
@@ -1232,9 +1328,29 @@
     }
     function productForm(root, product = null) {
         const editing = Boolean(product), modal = document.createElement('div'); modal.className = 'overlay';
-        modal.innerHTML = `<form class="modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>${editing ? 'Modifier le produit' : 'Nouveau produit'}</h3><label>SKU<input name="sku" maxlength="80" required value="${esc(product?.sku || '')}"></label><label>Nom<input name="name" maxlength="190" required value="${esc(product?.name || '')}"></label><label>Catégorie<input name="category" maxlength="120" value="${esc(product?.category || '')}"></label><div class="two"><label>Unité<input name="unit" maxlength="40" required value="${esc(product?.unit || 'unité')}">${editing ? '<small>Le stock reste géré par les mouvements.</small>' : ''}</label>${editing ? '' : `<label>Stock initial<input name="quantity_on_hand" type="number" min="0" step="0.001" value="0" required><small>Quantité initiale</small></label>`}</div><div class="two"><label>Seuil d’alerte<input name="reorder_level" type="number" min="0" step="0.001" value="${esc(product?.reorder_level ?? 0)}" required></label><label>Prix de vente HT<input name="sale_price" type="number" min="0" step="0.01" value="${esc(product?.sale_price ?? 0)}" required></label></div><label>Code-barres<input name="barcode" maxlength="120" value="${esc(product?.barcode || '')}"></label><label class="inline-check"><input name="prescription_required" type="checkbox" value="true" ${product?.prescription_required ? 'checked' : ''}> Ordonnance obligatoire</label><div class="two"><label>Quantité patient à vérifier<input name="max_customer_quantity" type="number" min="0.001" step="0.001" value="${esc(product?.max_customer_quantity ?? '')}" placeholder="Aucun seuil"></label><label>Intervalle minimal à vérifier (heures)<input name="minimum_purchase_interval_hours" type="number" min="1" max="8760" step="1" value="${esc(product?.minimum_purchase_interval_hours ?? '')}" placeholder="Aucun intervalle"></label></div><p class="notification-empty">Les seuils déclenchent un signalement à vérifier, sans blocage ni diagnostic automatique.</p><button class="btn">${editing ? 'Enregistrer les modifications' : 'Créer le produit'}</button><p class="error" role="alert"></p></form>`;
+        modal.innerHTML = `<form class="modal product-form"><button type="button" class="close" aria-label="Fermer">×</button><h3>${editing ? 'Modifier le produit' : 'Nouveau produit'}</h3>
+            <fieldset><legend>Identification</legend><div class="product-form-grid">
+                <label>SKU<input name="sku" maxlength="80" required value="${esc(product?.sku || '')}"></label>
+                <label>Nom du produit<input name="name" maxlength="190" required value="${esc(product?.name || '')}"></label>
+                <label>Catégorie<input name="category" maxlength="120" value="${esc(product?.category || '')}"></label>
+                <label>Code-barres<input name="barcode" maxlength="120" value="${esc(product?.barcode || '')}"></label>
+            </div></fieldset>
+            <fieldset><legend>Stock</legend><div class="product-form-grid">
+                <label>Unité<input name="unit" maxlength="40" required value="${esc(product?.unit || 'unité')}"></label>
+                ${editing ? `<label>Stock actuel<input value="${esc(product.quantity_on_hand)}" disabled><small>Modifiable par les mouvements de stock.</small></label>` : '<label>Stock initial<input name="quantity_on_hand" type="number" min="0" step="0.001" value="0" required></label>'}
+                <label>Seuil d’alerte<input name="reorder_level" type="number" min="0" step="0.001" value="${esc(product?.reorder_level ?? 0)}" required></label>
+            </div></fieldset>
+            <fieldset><legend>Prix et marge estimée</legend><p class="product-form-help">Saisissez les prix hors taxe par unité. La différence donne une marge indicative, avant autres frais.</p><div class="product-form-grid">
+                <label>Prix d’achat moyen HT<input name="purchase_cost" type="number" min="0" max="99999999999999.9999" step="0.0001" value="${esc(product?.purchase_cost ?? '')}" placeholder="Inconnu"><small>Coût moyen du stock actuel. Laissez vide si vous ne le connaissez pas.</small></label>
+                <label>Prix de vente HT<input name="sale_price" type="number" min="0" step="0.01" value="${esc(product?.sale_price ?? 0)}" required></label>
+            </div><p class="product-form-help">Ce n’est pas nécessairement le prix du dernier achat. Les réceptions recalculent la moyenne lorsque les coûts nécessaires sont connus ; une entrée sans coût peut la rendre inconnue.</p></fieldset>
+            <fieldset><legend>Règles de vente</legend><label class="inline-check"><input name="prescription_required" type="checkbox" value="true" ${product?.prescription_required ? 'checked' : ''}> Ordonnance obligatoire</label><div class="product-form-grid">
+                <label>Quantité patient à vérifier<input name="max_customer_quantity" type="number" min="0.001" step="0.001" value="${esc(product?.max_customer_quantity ?? '')}" placeholder="Aucun seuil"></label>
+                <label>Intervalle minimal à vérifier (heures)<input name="minimum_purchase_interval_hours" type="number" min="1" max="8760" step="1" value="${esc(product?.minimum_purchase_interval_hours ?? '')}" placeholder="Aucun intervalle"></label>
+            </div><p class="product-form-help">Ces seuils produisent un signalement à vérifier, sans blocage ni diagnostic automatique.</p></fieldset>
+            <button class="btn">${editing ? 'Enregistrer les modifications' : 'Créer le produit'}</button><p class="error" role="alert"></p></form>`;
         document.body.append(modal); const form = modal.querySelector('form'); modal.querySelector('.close').onclick = () => modal.remove(); modal.addEventListener('click', event => { if (event.target === modal) modal.remove(); });
-        form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'), data = Object.fromEntries(new FormData(form)); data.prescription_required = form.elements.prescription_required.checked; error.textContent = ''; try { await api(editing ? `/api/products/${encodeURIComponent(product.id)}` : '/api/products', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(data) }); modal.remove(); toast(editing ? 'Produit modifié.' : 'Produit créé.'); await products(root); } catch (reason) { error.textContent = reason.message; } };
+        form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'), data = Object.fromEntries(new FormData(form)); data.prescription_required = form.elements.prescription_required.checked; if (editing) { if (data.purchase_cost === String(product.purchase_cost ?? '')) delete data.purchase_cost; else data.expected_purchase_cost = product.purchase_cost; } error.textContent = ''; try { await api(editing ? `/api/products/${encodeURIComponent(product.id)}` : '/api/products', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(data) }); modal.remove(); toast(editing ? 'Produit modifié.' : 'Produit créé.'); await products(root); } catch (reason) { error.textContent = reason.message; } };
     }
     async function movements(root) {
         try {
@@ -1304,10 +1420,16 @@
     async function salesPOS(root) {
         try {
             const hasPatientsModule = !state.modules || state.modules.includes('patients');
-            const [productsList, patientsList, cashState, insurersList] = await Promise.all([api('/api/products'), hasPatientsModule ? api('/api/patients').catch(() => []) : [], api('/api/cash'), hasPatientsModule ? api('/api/insurers').catch(() => []) : []]);
+            const settings = await api('/api/settings');
+            state.settings = { ...state.settings, ...settings };
+            const separate = Boolean(Number(settings.separate_sale_payment));
+            refreshAccess();
+            if (!canAccessPage('pos')) throw Error('Le circuit a changé : vous n’avez plus accès à la saisie des ventes.');
+            const [productsList, patientsList, cashState, insurersList] = await Promise.all([api('/api/sales/products'), hasPatientsModule ? api('/api/sales/patients') : [], separate ? null : api('/api/cash'), hasPatientsModule ? api('/api/sales/insurers') : []]);
             const patientSalesEnabled = hasPatientsModule && patientsList.length > 0;
             state.products = productsList;
-            root.innerHTML = `<div class="panel"><div class="panel-head"><div><h3>Nouvelle vente</h3><p>Le stock est déduit à l’émission du reçu. Les prix catalogue sont hors taxe (${esc(state.settings.sales_tax_rate || 0)} % configuré).</p></div><button class="table-action" type="button" data-go="cash">Recettes & caisse</button></div>${cashState.current_session ? `<p class="tag">Caisse ouverte · fond initial ${formatMoney(cashState.current_session.opening_cash)} · espèces attendues ${formatMoney(cashState.summary.expected_cash)}</p>` : `<p class="error" role="alert">Vente impossible : la caisse est fermée. Ouvrez une session de caisse avant d’enregistrer la vente. <button class="table-action" type="button" data-go="cash">Ouvrir la caisse</button></p>`}<form id="sale-form" novalidate><div class="sale-customer">${patientSalesEnabled ? '<label>Type de client<select name="customer_type"><option value="external">Client externe (non patient du centre)</option><option value="patient">Patient du centre de santé</option></select></label>' : '<input type="hidden" name="customer_type" value="external">'}<label data-patient-field hidden>Patient<select name="patient_id"><option value="">Sélectionner un patient…</option>${patientsList.map(patient => `<option value="${esc(patient.id)}">${esc(patient.patient_code)} · ${esc(patient.full_name)}</option>`).join('')}</select><small>Requis pour contrôler les achats rapprochés et utiliser une assurance.</small></label><label data-external-field>Nom du client (facultatif)<input name="customer_name" maxlength="190" autocomplete="off" placeholder="Client de passage"></label><label data-external-field>Téléphone (facultatif)<input name="customer_phone" maxlength="50" autocomplete="off"></label></div><div class="sale-workflow-grid"><section class="sale-workflow-section"><div class="panel-head purchase-items-head"><h4>Articles</h4><div><button type="button" class="table-action" data-open-scanner>▣ Scanner un code</button><button type="button" class="table-action" data-add-sale-item>＋ Ajouter un produit</button></div></div><div class="sale-items"></div><div class="prescription-upload" data-prescription-upload hidden><h4>Ordonnance obligatoire</h4><p>Joignez une photo nette de l’ordonnance. Elle sera sauvegardée avec la facture (JPEG, PNG ou WebP, 500 Ko maximum).</p><label>Capturer ou choisir l’image<input data-prescription-image type="file" accept="image/*" capture="environment"></label><p data-prescription-status class="notification-empty" aria-live="polite"></p></div></section><section class="sale-workflow-section sale-payment-section"><div class="panel-head purchase-items-head"><h4>Modes d’encaissement</h4><button type="button" class="table-action" data-add-tender>＋ Ajouter un mode</button></div><div class="sale-tenders"></div></section></div><div class="sale-total" aria-live="polite"></div><label>Notes<textarea name="notes" rows="2" maxlength="2000"></textarea></label><p class="notification-empty">Les alertes de quantité ou d’intervalle sont des signaux à vérifier par un professionnel ; elles ne constituent pas un diagnostic ni un blocage automatique.</p><button class="btn">Enregistrer la vente et générer le reçu</button><p class="error" role="alert"></p></form></div>`;
+            root.innerHTML = `<div class="panel"><div class="panel-head"><div><h3>Nouvelle vente</h3><p>Le stock est déduit à l’émission du reçu. Les prix catalogue sont hors taxe (${esc(state.settings.sales_tax_rate || 0)} % configuré).</p></div><button class="table-action" type="button" data-go="cash">Recettes & caisse</button></div>${separate ? `<p class="tag">Vente en attente : un autre utilisateur doit encaisser en caisse.</p>` : cashState.current_session ? `<p class="tag">Caisse ouverte · fond initial ${formatMoney(cashState.current_session.opening_cash)} · espèces attendues ${formatMoney(cashState.summary.expected_cash)}</p>` : `<p class="error" role="alert">Vente impossible : la caisse est fermée. Ouvrez une session de caisse avant d’enregistrer la vente. <button class="table-action" type="button" data-go="cash">Ouvrir la caisse</button></p>`}<form id="sale-form" novalidate><div class="sale-customer">${patientSalesEnabled ? '<label>Type de client<select name="customer_type"><option value="external">Client externe (non patient du centre)</option><option value="patient">Patient du centre de santé</option></select></label>' : '<input type="hidden" name="customer_type" value="external">'}<label data-patient-field hidden>Patient<select name="patient_id"><option value="">Sélectionner un patient…</option>${patientsList.map(patient => `<option value="${esc(patient.id)}">${esc(patient.patient_code)} · ${esc(patient.full_name)}</option>`).join('')}</select><small>Requis pour contrôler les achats rapprochés et utiliser une assurance.</small></label><label data-external-field>Nom du client (facultatif)<input name="customer_name" maxlength="190" autocomplete="off" placeholder="Client de passage"></label><label data-external-field>Téléphone (facultatif)<input name="customer_phone" maxlength="50" autocomplete="off"></label></div><div class="sale-workflow-grid"><section class="sale-workflow-section"><div class="panel-head purchase-items-head"><h4>Articles</h4><div><button type="button" class="table-action" data-open-scanner>▣ Scanner un code</button><button type="button" class="table-action" data-add-sale-item>＋ Ajouter un produit</button></div></div><div class="sale-items"></div><div class="prescription-upload" data-prescription-upload hidden><h4>Ordonnance obligatoire</h4><p>Joignez une photo nette de l’ordonnance. Elle sera sauvegardée avec la facture (JPEG, PNG ou WebP, 500 Ko maximum).</p><label>Capturer ou choisir l’image<input data-prescription-image type="file" accept="image/*" capture="environment"></label><p data-prescription-status class="notification-empty" aria-live="polite"></p></div></section><section class="sale-workflow-section sale-payment-section" ${separate ? 'hidden' : ''}><div class="panel-head purchase-items-head"><h4>Modes d’encaissement</h4><button type="button" class="table-action" data-add-tender>＋ Ajouter un mode</button></div><div class="sale-tenders"></div></section></div><div class="sale-total" aria-live="polite"></div><label>Notes<textarea name="notes" rows="2" maxlength="2000"></textarea></label><p class="notification-empty">Les alertes de quantité ou d’intervalle sont des signaux à vérifier par un professionnel ; elles ne constituent pas un diagnostic ni un blocage automatique.</p><button class="btn">${separate ? 'Enregistrer la vente à encaisser' : 'Enregistrer la vente et générer le reçu'}</button><p class="error" role="alert"></p></form></div>`;
+            refreshAccess();
             const form = root.querySelector('#sale-form'), itemsBox = form.querySelector('.sale-items'), tendersBox = form.querySelector('.sale-tenders');
             const prescriptionInput = form.querySelector('[data-prescription-image]'), prescriptionPanel = form.querySelector('[data-prescription-upload]'), prescriptionStatus = form.querySelector('[data-prescription-status]');
             let prescriptionImage = null, prescriptionProcessing = false, prescriptionVersion = 0, scannerModal = null, scannerReader = null, scannerControls = null, scannerObserver = null, scannerGeneration = 0, scannerAudioContext = null;
@@ -1440,7 +1562,7 @@
                 const row = document.createElement('div'); row.className = 'sale-tender-row';
                 row.innerHTML = `<div class="two"><label>Mode<select data-method>${Object.entries(paymentLabels).filter(([value]) => value !== 'insurance' || patientSalesEnabled).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></label><label>Montant<input data-amount type="number" min="0" step="0.01" value="${esc(amount)}" placeholder="Laisser à 0 pour crédit"></label></div><div class="two"><label data-cash-field hidden>Espèces reçues<input data-cash-received type="number" min="0" step="0.01"></label><label data-insurer-field hidden>Assureur<select data-insurer><option value="">Sélectionner un patient et un contrat</option>${insurersList.map(insurer => `<option value="${esc(insurer.id)}">${esc(insurer.name)}</option>`).join('')}</select></label></div><label>Référence (facultatif)<input data-reference maxlength="190"></label><button class="table-action danger" type="button" data-remove-tender>Retirer ce mode</button>`;
                 row.querySelector('[data-remove-tender]').onclick = () => { row.remove(); updateSaleTotal(); };
-                row.querySelector('[data-method]').onchange = () => { row.querySelector('[data-cash-field]').hidden = row.querySelector('[data-method]').value !== 'cash'; row.querySelector('[data-insurer-field]').hidden = row.querySelector('[data-method]').value !== 'insurance'; };
+                row.querySelector('[data-method]').onchange = () => { const cash = row.querySelector('[data-method]').value === 'cash'; row.querySelector('[data-cash-field]').hidden = !cash; row.querySelector('[data-cash-received]').required = cash; row.querySelector('[data-cash-received]').disabled = !cash; row.querySelector('[data-insurer-field]').hidden = row.querySelector('[data-method]').value !== 'insurance'; };
                 row.querySelector('[data-method]').dispatchEvent(new Event('change')); row.querySelector('[data-amount]').oninput = updateSaleTotal; tendersBox.append(row);
             }
             async function loadPatientInsurers() {
@@ -1497,27 +1619,35 @@
                 loadPatientInsurers().catch(error => toast(error.message));
             };
             customerType.onchange = syncCustomerType;
-            addSaleItem(); addTender(); syncCustomerType();
+            addSaleItem(); if (!separate) addTender(); syncCustomerType();
             form.onsubmit = async event => {
                 event.preventDefault(); const error = form.querySelector('.error'); error.textContent = '';
-                if (!cashState.current_session) { error.textContent = 'Vente impossible : la caisse est fermée. Ouvrez une session de caisse puis réessayez.'; return; }
+                if (!separate && !cashState.current_session) { error.textContent = 'Vente impossible : la caisse est fermée. Ouvrez une session de caisse puis réessayez.'; return; }
                 if (prescriptionProcessing) { error.textContent = 'Patientez pendant la préparation de la photo de l’ordonnance.'; return; }
                 if ([...itemsBox.children].some(row => !row.querySelector('[data-product]').value)) { error.textContent = 'Sélectionnez un produit pour chaque ligne avant d’enregistrer la vente.'; itemsBox.querySelector('[data-product]:invalid')?.focus(); return; }
                 const items = [...itemsBox.children].map(row => ({ product_id: row.querySelector('[data-product]').value, quantity: row.querySelector('[data-quantity]').value, prescription_provided: row.querySelector('[data-prescription]').checked }));
                 if (items.some(item => { const product = productsList.find(entry => String(entry.id) === item.product_id); return product?.prescription_required && !item.prescription_provided; })) { error.textContent = 'Confirmez la présentation de l’ordonnance pour chaque produit concerné.'; return; }
                 if (hasRequiredPrescription() && !prescriptionImage) { error.textContent = 'Capturez ou joignez la photo de l’ordonnance requise avant d’enregistrer la vente.'; prescriptionStatus.textContent = 'Une ordonnance doit être jointe à cette vente.'; return; }
-                const payments = [...tendersBox.children].map(row => ({ method: row.querySelector('[data-method]').value, amount: Number(row.querySelector('[data-amount]').value || 0), cash_received: row.querySelector('[data-method]').value === 'cash' ? Number(row.querySelector('[data-cash-received]').value || row.querySelector('[data-amount]').value || 0) : undefined, insurer_id: row.querySelector('[data-insurer]').value || undefined, reference: row.querySelector('[data-reference]').value || undefined })).filter(payment => payment.amount > 0);
+                for (const row of tendersBox.children) {
+                    if (row.querySelector('[data-method]').value !== 'cash') continue;
+                    const received = row.querySelector('[data-cash-received]');
+                    if (!received.value.trim()) { error.textContent = 'Le montant reçu en espèces est obligatoire.'; received.focus(); return; }
+                    if (!received.checkValidity() || Number(received.value) < Number(row.querySelector('[data-amount]').value || 0)) { error.textContent = 'Le montant reçu en espèces doit couvrir le montant encaissé.'; received.focus(); return; }
+                }
+                const payments = [...tendersBox.children].map(row => ({ method: row.querySelector('[data-method]').value, amount: Number(row.querySelector('[data-amount]').value || 0), cash_received: row.querySelector('[data-method]').value === 'cash' ? Number(row.querySelector('[data-cash-received]').value) : undefined, insurer_id: row.querySelector('[data-insurer]').value || undefined, reference: row.querySelector('[data-reference]').value || undefined })).filter(payment => payment.amount > 0);
                 const isPatient = form.elements.customer_type.value === 'patient';
                 if (isPatient && !form.elements.patient_id.value) { error.textContent = 'Sélectionnez le patient ou choisissez « Client externe ».'; form.elements.patient_id.focus(); return; }
                 const customerName = form.elements.customer_name.value.trim(), customerPhone = form.elements.customer_phone.value.trim();
                 const notes = [!isPatient && customerPhone ? `Téléphone client : ${customerPhone}` : '', form.elements.notes.value.trim()].filter(Boolean).join('\n');
                 const payload = { patient_id: isPatient ? form.elements.patient_id.value : null, ...(!isPatient && customerName ? { patient_name: customerName } : {}), items, payments, notes, ...(prescriptionImage ? { prescription_image: prescriptionImage } : {}) };
+                const submit = form.querySelector('button.btn'); submit.disabled = true;
                 try {
                     const result = await api('/api/sales', { method: 'POST', body: JSON.stringify(payload) });
                     modalMessage(result.review_flags);
-                    toast(`Reçu ${result.invoice_number} généré · ${formatMoney(result.total_amount)}.`);
+                    toast(`Vente ${result.invoice_number} · ${invoiceStatusLabels[result.status] || result.status} · ${formatMoney(result.total_amount)}.`);
                     await salesInvoices(root); await saleReceipt(root, result.id);
                 } catch (reason) { error.textContent = reason.message; }
+                finally { submit.disabled = false; }
             };
         } catch (error) { root.innerHTML = `<div class="panel"><p class="error">${esc(error.message)}</p></div>`; }
     }
@@ -1536,6 +1666,7 @@
                     { label: 'Actions', render: invoice => `<button class="table-action" type="button" data-view-invoice="${esc(invoice.id)}">Reçu / détails</button>` }
                 ]
             });
+            refreshAccess();
             root.querySelectorAll('[data-view-invoice]').forEach(button => button.onclick = () => saleReceipt(root, button.dataset.viewInvoice));
         } catch (error) { root.innerHTML = `<div class="panel"><p class="error">${esc(error.message)}</p></div>`; }
     }
@@ -1543,12 +1674,19 @@
         try {
             const invoice = await api(`/api/sales/${encodeURIComponent(invoiceId)}`), modal = document.createElement('div'); modal.className = 'overlay'; modal.id = 'receipt-modal';
             let flags = invoice.review_flags || []; if (typeof flags === 'string') flags = JSON.parse(flags);
-            const paid = Number(invoice.paid_amount || 0), refunded = Number(invoice.refunded_amount || 0), returnedValue = (invoice.returns || []).reduce((sum, item) => sum + Number(item.refund_amount || 0), 0), balance = Math.max(0, Number(invoice.total_amount) - returnedValue - paid + refunded);
+            const paid = Number(invoice.paid_amount || 0), refunded = Number(invoice.refunded_amount || 0), returnedValue = Number(invoice.returned_value), balance = Math.max(0, Number(invoice.total_amount) - returnedValue - paid + refunded);
             const itemRows = invoice.items.map(item => `<tr><td>${esc(item.product_name)}<small>${esc(item.sku)}</small></td><td>${esc(item.quantity)} ${esc(item.unit)}</td><td>${formatMoney(item.unit_price)}</td><td>${formatMoney(item.line_total)}</td><td><span class="tag">${item.prescription_required ? 'Ordonnance requise' : 'Sans ordonnance requise'}${item.prescription_required && item.prescription_provided ? ' · présentée' : ''}</span></td><td>${esc(item.returned_quantity)}</td></tr>`).join('');
             const paymentRows = invoice.payments.map(payment => `<div class="row"><span>${esc(paymentLabels[payment.payment_method] || payment.payment_method)}${payment.insurer_name ? ` · ${esc(payment.insurer_name)}` : ''}${payment.reference ? ` · réf. ${esc(payment.reference)}` : ''}<small>${esc(new Date(payment.created_at).toLocaleString('fr-FR'))}${payment.payment_method === 'cash' ? ` · reçu ${formatMoney(payment.cash_received)}, rendu ${formatMoney(payment.cash_change)}` : ''}</small></span><strong>${formatMoney(payment.amount)}</strong></div>`).join('');
             const returnRows = invoice.returns.map(record => `<div class="row"><span>${esc(record.return_number)} · ${esc(paymentLabels[record.refund_method] || record.refund_method)}${record.insurer_name ? ` · ${esc(record.insurer_name)}` : ''}<small>${esc(record.reason)} · ${esc(new Date(record.created_at).toLocaleString('fr-FR'))}</small></span><strong>− ${formatMoney(record.refund_amount)}</strong></div>`).join('');
             const flagsHtml = flags.length ? `<div class="review-flags"><b>Achat à vérifier par un professionnel</b>${flags.map(flag => `<p>${esc(flag.product_name)} — ${esc(flag.message)}</p>`).join('')}<small>Signalement indicatif, non diagnostique et sans blocage automatique.</small></div>` : '';
-            modal.innerHTML = `<section class="modal receipt-content"><button type="button" class="close" aria-label="Fermer">×</button><div class="panel-head"><div><small>REÇU DE VENTE</small><h3>${esc(invoice.invoice_number)}</h3><p>${esc(new Date(invoice.created_at).toLocaleString('fr-FR'))}</p></div><button type="button" class="table-action" data-print>Imprimer</button></div><p>Client : <b>${esc(invoice.patient_name || 'Client non enregistré')}</b></p>${flagsHtml}<div class="tablewrap"><table><thead><tr><th>Produit</th><th>Qté</th><th>PU HT</th><th>Total TTC</th><th>Ordonnance</th><th>Retour</th></tr></thead><tbody>${itemRows}</tbody></table></div><div class="row"><span>Sous-total HT</span><strong>${formatMoney(invoice.subtotal)}</strong></div><div class="row"><span>Taxe (${esc(invoice.tax_rate)} %)</span><strong>${formatMoney(invoice.tax_amount)}</strong></div><div class="row"><b>Total TTC</b><strong>${formatMoney(invoice.total_amount)}</strong></div><h4>Paiements</h4>${paymentRows || '<p class="notification-empty">Aucun paiement enregistré.</p>'}${returnRows ? `<h4>Retours / remboursements</h4>${returnRows}` : ''}${invoice.has_prescription ? '<button type="button" class="table-action" data-view-prescription>Consulter l’ordonnance jointe</button><div data-prescription-preview></div>' : ''}<div class="row"><b>Solde à payer</b><strong>${formatMoney(balance)}</strong></div><div class="receipt-actions">${invoice.status !== 'cancelled' && invoice.status !== 'returned' && balance > 0 ? '<button type="button" class="btn" data-pay-balance>Enregistrer un paiement</button>' : ''}${invoice.status !== 'cancelled' && invoice.status !== 'returned' ? '<button type="button" class="table-action" data-return-items>Retour / remboursement</button>' : ''}${invoice.status === 'issued' ? '<button type="button" class="table-action danger" data-cancel-invoice>Annuler la facture</button>' : ''}</div></section>`;
+            modal.innerHTML = `<section class="modal receipt-content"><button type="button" class="close" aria-label="Fermer">×</button><div class="panel-head"><div><small>REÇU DE VENTE</small><h3>${esc(invoice.invoice_number)}</h3><p>${esc(new Date(invoice.created_at).toLocaleString('fr-FR'))}</p></div><button type="button" class="table-action" data-print>Imprimer</button></div><p>Statut : <b>${esc(invoiceStatusLabels[invoice.status] || invoice.status)}</b></p><p>Client : <b>${esc(invoice.patient_name || 'Client non enregistré')}</b></p>${flagsHtml}<div class="tablewrap"><table><thead><tr><th>Produit</th><th>Qté</th><th>PU HT</th><th>Total TTC</th><th>Ordonnance</th><th>Retour</th></tr></thead><tbody>${itemRows}</tbody></table></div><div class="row"><span>Sous-total HT</span><strong>${formatMoney(invoice.subtotal)}</strong></div><div class="row"><span>Taxe (${esc(invoice.tax_rate)} %)</span><strong>${formatMoney(invoice.tax_amount)}</strong></div><div class="row"><b>Total TTC</b><strong>${formatMoney(invoice.total_amount)}</strong></div><h4>Paiements</h4>${paymentRows || '<p class="notification-empty">Aucun paiement enregistré.</p>'}${returnRows ? `<h4>Retours / remboursements</h4>${returnRows}` : ''}${invoice.has_prescription ? '<button type="button" class="table-action" data-view-prescription>Consulter l’ordonnance jointe</button><div data-prescription-preview></div>' : ''}<div class="row"><b>Solde à payer</b><strong>${formatMoney(balance)}</strong></div>${invoice.separate_cashier && balance > 0 && !['cancelled', 'returned'].includes(invoice.status) ? `<p class="notification-empty">Encaissement en caisse par un autre utilisateur.</p>` : ''}<div class="receipt-actions">${invoice.status !== 'cancelled' && invoice.status !== 'returned' && balance > 0 && !invoice.separate_cashier ? '<button type="button" class="btn" data-pay-balance>Enregistrer un paiement</button>' : ''}${invoice.status !== 'cancelled' && invoice.status !== 'returned' ? '<button type="button" class="table-action" data-return-items>Retour / remboursement</button>' : ''}${invoice.status === 'issued' ? '<button type="button" class="table-action danger" data-cancel-invoice>Annuler la facture</button>' : ''}</div></section>`;
+            const canPay = canAccessPage('cash') && (!invoice.separate_cashier || (window.RedamsAccess.canCollect(state.profile, { separate_sale_payment: 1 }) && Number(invoice.created_by) !== state.userId));
+            const paymentButton = modal.querySelector('[data-pay-balance]');
+            if (paymentButton) paymentButton.hidden = !canPay;
+            const returnButton = modal.querySelector('[data-return-items]');
+            if (returnButton) returnButton.hidden = !canAccessPage('cash');
+            const prescriptionButton = modal.querySelector('[data-view-prescription]');
+            if (prescriptionButton) prescriptionButton.hidden = !state.canAccessPatientRecords;
             document.body.append(modal); let prescriptionUrl = null;
             const closeReceipt = () => { if (prescriptionUrl) URL.revokeObjectURL(prescriptionUrl); modal.remove(); };
             modal.querySelector('.close').onclick = closeReceipt; modal.addEventListener('click', event => { if (event.target === modal) closeReceipt(); });
@@ -1559,14 +1697,14 @@
             modal.querySelector('[data-cancel-invoice]')?.addEventListener('click', async () => { const reason = prompt('Motif d’annulation (obligatoire) :'); if (reason === null) return; try { await api(`/api/sales/${encodeURIComponent(invoice.id)}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }); toast('Facture annulée, stock réintégré.'); closeReceipt(); await salesInvoices(root); } catch (error) { toast(error.message); } });
         } catch (error) { toast(error.message); }
     }
-    async function paymentForm(root, invoice, balance) {
+    async function paymentForm(root, invoice, balance, cashPage = null) {
         let coverages = [];
         try { if (invoice.patient_id) coverages = await api(`/api/sales/patients/${encodeURIComponent(invoice.patient_id)}/insurers`); } catch (error) { toast(error.message); return; }
         const modal = document.createElement('div'); modal.className = 'overlay';
         modal.innerHTML = `<form class="modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>Enregistrer un paiement</h3><p>Solde disponible : ${formatMoney(balance)}</p><label>Mode de paiement<select name="method">${Object.entries(paymentLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></label><label>Montant<input name="amount" type="number" min="0.01" max="${esc(balance)}" step="0.01" value="${esc(balance)}" required></label><label data-cash-field hidden>Espèces reçues<input name="cash_received" type="number" min="0" step="0.01"></label><label data-insurer-field hidden>Assureur<select name="insurer_id"><option value="">Choisir un assureur actif du patient</option>${coverages.map(item => `<option value="${esc(item.insurer_id)}">${esc(item.insurer_name)}</option>`).join('')}</select></label><label>Référence<input name="reference" maxlength="190"></label><button class="btn">Enregistrer le paiement</button><p class="error" role="alert"></p></form>`;
         document.body.append(modal); const form = modal.querySelector('form'); modal.querySelector('.close').onclick = () => modal.remove();
-        form.elements.method.onchange = () => { form.querySelector('[data-cash-field]').hidden = form.elements.method.value !== 'cash'; form.querySelector('[data-insurer-field]').hidden = form.elements.method.value !== 'insurance'; }; form.elements.method.dispatchEvent(new Event('change'));
-        form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; const payment = { method: form.elements.method.value, amount: form.elements.amount.value, reference: form.elements.reference.value || undefined }; if (payment.method === 'cash') payment.cash_received = form.elements.cash_received.value || payment.amount; if (payment.method === 'insurance') payment.insurer_id = form.elements.insurer_id.value; try { await api(`/api/sales/${encodeURIComponent(invoice.id)}/payments`, { method: 'POST', body: JSON.stringify({ payments: [payment] }) }); modal.remove(); toast('Paiement enregistré.'); await saleReceipt(root, invoice.id); await salesInvoices(root); } catch (reason) { error.textContent = reason.message; } };
+        form.elements.method.onchange = () => { const cash = form.elements.method.value === 'cash'; form.querySelector('[data-cash-field]').hidden = !cash; form.elements.cash_received.required = cash; form.elements.cash_received.disabled = !cash; form.querySelector('[data-insurer-field]').hidden = form.elements.method.value !== 'insurance'; }; form.elements.method.dispatchEvent(new Event('change'));
+        form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; if (!form.reportValidity()) return; const submit = form.querySelector('[type=submit],button.btn'); submit.disabled = true; const payment = { method: form.elements.method.value, amount: form.elements.amount.value, reference: form.elements.reference.value || undefined }; if (payment.method === 'cash') payment.cash_received = form.elements.cash_received.value; if (payment.method === 'insurance') payment.insurer_id = form.elements.insurer_id.value; try { const result = await api(`/api/sales/${encodeURIComponent(invoice.id)}/payments`, { method: 'POST', body: JSON.stringify({ payments: [payment] }) }); modal.remove(); toast(`Paiement enregistré · ${invoiceStatusLabels[result.status] || result.status}.`); if (cashPage !== null) await cashRegister(root, cashPage); else { await salesInvoices(root); await saleReceipt(root, invoice.id); } } catch (reason) { error.textContent = reason.message; } finally { submit.disabled = false; } };
     }
     function returnForm(root, invoice) {
         const modal = document.createElement('div'); modal.className = 'overlay';
@@ -1576,10 +1714,42 @@
         form.elements.refund_method.onchange = () => { const field = form.querySelector('[data-return-insurer]'); if (field) field.hidden = form.elements.refund_method.value !== 'insurance'; };
         form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; const items = [...form.querySelectorAll('[data-item-id]')].map(field => ({ item_id: field.value, quantity: field.closest('.purchase-item-row').querySelector('[data-return-quantity]').value, restocked: field.closest('.purchase-item-row').querySelector('[data-restock]').checked })).filter(item => Number(item.quantity) > 0), body = { items, refund_method: form.elements.refund_method.value, reason: form.elements.reason.value }; if (body.refund_method === 'insurance') body.insurer_id = form.elements.insurer_id.value; try { const result = await api(`/api/sales/${encodeURIComponent(invoice.id)}/returns`, { method: 'POST', body: JSON.stringify(body) }); modal.remove(); toast(`Retour ${result.return_number} · ${formatMoney(result.refund_amount)} remboursé.`); await saleReceipt(root, invoice.id); await salesInvoices(root); } catch (reason) { error.textContent = reason.message; } };
     }
-    async function cashRegister(root) {
+    async function cashRegister(root, pendingPage = 0) {
         try {
             const data = await api('/api/cash'), session = data.current_session;
+            const pending = state.modules === null || state.modules.includes('sales') ? await api(`/api/sales/pending?offset=${pendingPage * 100}`) : [];
             root.innerHTML = `${session ? `<div class="stats cash-stats"><article><small>Fond de caisse</small><b>${formatMoney(session.opening_cash)}</b></article><article><small>Espèces attendues</small><b>${formatMoney(data.summary.expected_cash)}</b></article><article><small>Session ouverte depuis</small><b>${esc(new Date(session.opened_at).toLocaleTimeString('fr-FR'))}</b></article><article><small>État</small><b>Ouverte</b></article></div>` : `<div class="panel"><div class="panel-head"><div><h3>Aucune session ouverte</h3><p>Ouvrez une session avec le fond de caisse compté avant d’encaisser.</p></div><button class="btn" type="button" data-open-cash>＋ Ouvrir la caisse</button></div></div>`}<div class="settings-page"><div class="settings-tabs" role="tablist" aria-label="Sections des recettes et de la caisse"><button type="button" class="settings-tab active" role="tab" aria-selected="true" aria-controls="cash-panel-summary" id="cash-tab-summary" data-cash-tab="summary">Recettes & caisse</button><button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="cash-panel-sessions" id="cash-tab-sessions" data-cash-tab="sessions">Sessions récentes</button><button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="cash-panel-movements" id="cash-tab-movements" data-cash-tab="movements">Mouvements récents</button></div><section class="panel" role="tabpanel" id="cash-panel-summary" aria-labelledby="cash-tab-summary"><div class="panel-head"><div><h3>Recettes & caisse</h3><p>Recettes, ventes, dépenses, remboursements et rapprochement par mode.</p></div>${session ? '<div><button class="table-action" type="button" data-cash-entry="income">＋ Recette</button><button class="table-action" type="button" data-cash-entry="expense">− Dépense</button><button class="btn" type="button" data-close-cash>Clôturer la session</button></div>' : ''}</div>${session ? `<div class="cash-methods">${data.summary.by_method.map(row => `<div class="row"><span>${esc(paymentLabels[row.payment_method] || row.payment_method)}<small>${esc(row.inflow_count)} entrée(s) · ${esc(row.outflow_count)} sortie(s)</small></span><strong>${formatMoney(row.net_amount)}</strong></div>`).join('') || '<p class="notification-empty">Aucun mouvement enregistré dans cette session.</p>'}</div>` : ''}</section><section class="panel" role="tabpanel" id="cash-panel-sessions" aria-labelledby="cash-tab-sessions" hidden><div class="panel-head"><div><h3>Sessions récentes</h3><p>Historique des ouvertures, clôtures et écarts de caisse.</p></div></div><div data-cash-sessions></div></section><section class="panel" role="tabpanel" id="cash-panel-movements" aria-labelledby="cash-tab-movements" hidden><div class="panel-head"><div><h3>Mouvements récents</h3><p>Historique des recettes, ventes, dépenses et remboursements.</p></div></div><p class="notification-empty">Les écritures sont immuables pour assurer la traçabilité.</p><div data-cash-movements></div></section></div>`;
+            const pendingPanel = document.createElement('section');
+            pendingPanel.className = 'panel';
+            pendingPanel.innerHTML = `<div class="panel-head"><div><h3>Ventes à encaisser</h3><p>Ventes préparées par un autre utilisateur ; les paiements partiels restent visibles jusqu’au règlement du solde.</p></div></div><div data-pending-sales></div><div class="table-footer"><button class="table-action" type="button" data-pending-prev ${pendingPage === 0 ? 'disabled' : ''}>Précédent</button><span>Page ${pendingPage + 1}</span><button class="table-action" type="button" data-pending-next ${pending.length <= 100 ? 'disabled' : ''}>Suivant</button></div>`;
+            root.prepend(pendingPanel);
+            mountDataTable(pendingPanel.querySelector('[data-pending-sales]'), {
+                rows: pending.slice(0, 100).map(item => ({ ...item, searchText: [item.invoice_number, item.patient_name, item.seller_name, item.status].join(' ') })),
+                searchText: 'Rechercher par facture, client ou vendeur…',
+                columns: [
+                    { label: 'Facture', render: item => `<b>${esc(item.invoice_number)}</b><small>${esc(new Date(item.created_at).toLocaleString('fr-FR'))}</small>` },
+                    { label: 'Client', render: item => esc(item.patient_name || 'Client non enregistré') },
+                    { label: 'Vendeur', render: item => esc(item.seller_name) },
+                    { label: 'Statut', render: item => esc(invoiceStatusLabels[item.status] || item.status) },
+                    { label: 'Solde', render: item => formatMoney(Number(item.total_amount) - Number(item.returned_value) - Number(item.paid_amount) + Number(item.refunded_amount)) },
+                    { label: 'Action', render: item => `<button class="table-action" type="button" data-collect="${esc(item.id)}" ${session ? '' : 'disabled title="Ouvrez une caisse"'}>Encaisser</button>` }
+                ]
+            });
+            pendingPanel.querySelector('[data-pending-prev]').onclick = () => cashRegister(root, pendingPage - 1);
+            pendingPanel.querySelector('[data-pending-next]').onclick = () => cashRegister(root, pendingPage + 1);
+            pendingPanel.onclick = async event => {
+                const button = event.target.closest('[data-collect]');
+                if (!button) return;
+                button.disabled = true;
+                try {
+                    const invoice = await api(`/api/sales/${encodeURIComponent(button.dataset.collect)}`);
+                    const returned = Number(invoice.returned_value);
+                    const balance = Math.max(0, Number(invoice.total_amount) - returned - Number(invoice.paid_amount || 0) + Number(invoice.refunded_amount || 0));
+                    if (balance <= 0 || ['cancelled', 'returned'].includes(invoice.status)) { await cashRegister(root, pendingPage); toast('Cette vente n’a plus de solde à encaisser.', 'warning'); return; }
+                    await paymentForm(root, invoice, balance, pendingPage);
+                } catch (error) { toast(error.message, 'error'); }
+                finally { button.disabled = false; }
+            };
             root.querySelectorAll('[data-cash-tab]').forEach(button => button.addEventListener('click', () => {
                 const selectedTab = button.dataset.cashTab;
                 root.querySelectorAll('[data-cash-tab]').forEach(tab => { const selected = tab === button; tab.classList.toggle('active', selected); tab.setAttribute('aria-selected', String(selected)); });
@@ -1627,7 +1797,7 @@
         form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; const body = { movement_type: type, payment_method: form.elements.payment_method.value, amount: form.elements.amount.value, description: form.elements.description.value }; try { await api('/api/cash/movements', { method: 'POST', body: JSON.stringify(body) }); modal.remove(); toast(type === 'income' ? 'Recette enregistrée.' : 'Dépense enregistrée.'); await cashRegister(root); } catch (reason) { error.textContent = reason.message; } };
     }
     async function settings(root, activeTab = 'general') {
-        const tabs = [['general', 'Généraux & identité'], ['tax', 'Fiscalité & reçus'], ['patients', 'Dossiers patients'], ['backup', 'Sauvegarde & restauration'], ['security', 'Sécurité & mot de passe'], ['codes', 'QR & codes-barres'], ['search', 'Index de recherche']];
+        const tabs = [['general', 'Généraux & identité'], ['workflow', 'Circuit de vente'], ['tax', 'Fiscalité & reçus'], ['patients', 'Dossiers patients'], ['backup', 'Sauvegarde & restauration'], ['security', 'Sécurité & mot de passe'], ['codes', 'QR & codes-barres'], ['search', 'Index de recherche']].filter(([id]) => state.canAdminister || id === 'security');
         if (!tabs.some(([id]) => id === activeTab)) activeTab = 'general';
         if (!state.canAdminister && activeTab !== 'security') { root.innerHTML = '<div class="panel"><h3>Accès réservé</h3><p class="error" role="alert">Les paramètres de l’établissement sont réservés aux propriétaires et administrateurs.</p></div>'; return; }
         root.innerHTML = `<div class="settings-page"><div class="settings-tabs" role="tablist" aria-label="Sections des paramètres">${tabs.map(([id, label]) => `<button type="button" class="settings-tab${activeTab === id ? ' active' : ''}" role="tab" aria-selected="${activeTab === id}" data-settings-tab="${id}">${label}</button>`).join('')}</div><div id="settings-panel" role="tabpanel"></div></div>`;
@@ -1690,8 +1860,30 @@
             } catch (error) { if (panel.isConnected) panel.innerHTML = `<div class="panel"><p class="error">${esc(error.message)}</p></div>`; }
             return;
         }
+        if (activeTab === 'workflow') {
+            try {
+                const s = await api('/api/settings'); if (!panel.isConnected) return;
+                const workflow = document.createElement('section');
+                workflow.className = 'panel settings';
+                workflow.innerHTML = `<h3>Circuit de vente</h3><p><b>Un temps :</b> le pharmacien ou le caissier saisit et encaisse la vente, avec une caisse ouverte.</p><p><b>Deux temps :</b> le pharmacien saisit sans paiement, puis dirige le client vers la caisse. Le caissier retrouve la facture dans « Ventes à encaisser » et enregistre le paiement. Les administrateurs gardent leurs accès, mais personne ne peut encaisser sa propre vente préparée.</p><p>Le stock est déduit à la saisie. Les ventes existantes conservent leur règle initiale. Les accès des rôles suivent le mode actuel.</p><form><label>Mode de vente<select name="mode"><option value="single" ${!Number(s.separate_sale_payment) ? 'selected' : ''}>Un temps : saisie et encaissement</option><option value="separate" ${Number(s.separate_sale_payment) ? 'selected' : ''}>Deux temps : pharmacien puis caisse</option></select></label><p class="error" role="alert"></p><button class="btn">Enregistrer le circuit</button></form>`;
+                panel.append(workflow);
+                workflow.querySelector('form').onsubmit = async event => {
+                    event.preventDefault();
+                    const form = event.currentTarget, error = form.querySelector('.error'), submit = form.querySelector('button');
+                    submit.disabled = true; error.textContent = '';
+                    try {
+                        const result = await api('/api/settings/sale-workflow', { method: 'PUT', body: JSON.stringify({ separate_sale_payment: form.elements.mode.value === 'separate' }) });
+                        state.settings.separate_sale_payment = result.separate_sale_payment;
+                        refreshAccess();
+                        toast(result.message);
+                    } catch (reason) { error.textContent = reason.message; }
+                    finally { submit.disabled = false; }
+                };
+            } catch (error) { if (panel.isConnected) panel.innerHTML = `<div class="panel"><p class="error">${esc(error.message)}</p></div>`; }
+            return;
+        }
         if (activeTab === 'backup') {
-            panel.innerHTML = `<section class="panel"><small>PROTECTION DES DONNÉES</small><h3>Sauvegarde de l’établissement</h3><p>Le fichier comprend les données métier de cet établissement et les ordonnances enregistrées. Il ne contient pas les comptes utilisateurs, les abonnements ni les fichiers logo : conservez les comptes et sauvegardez séparément le dossier <code>public/uploads/logos</code>.</p><div class="backup-actions"><button class="btn" type="button" data-backup-download>Télécharger une sauvegarde JSON</button><label class="backup-file-label">Fichier de sauvegarde à fusionner<input type="file" data-backup-file accept="application/json,.json"></label><button class="table-action" type="button" data-backup-restore disabled>Fusionner la sauvegarde</button></div><p class="notification-empty">La restauration ajoute uniquement les enregistrements manquants de ce même établissement. Les données existantes et les paramètres de l’entreprise ne sont jamais remplacés. En cas de conflit, toute l’opération est annulée. Les sauvegardes contiennent des données personnelles : stockez-les en lieu sûr.</p><p class="error" data-backup-error role="alert"></p></section>`;
+            panel.innerHTML = `<section class="panel"><small>PROTECTION DES DONNÉES</small><h3>Sauvegarde de l’établissement</h3><p>Le fichier comprend les données métier de cet établissement et les ordonnances enregistrées. Il ne contient pas les comptes utilisateurs, les abonnements ni les fichiers logo : conservez les comptes et sauvegardez séparément le dossier <code>public/uploads/logos</code>.</p><p class="accounting-warning">Attention : cette sauvegarde JSON ne contient ni le dossier ni les écritures comptables, ni les versions de révision. Prévoyez également une sauvegarde complète de la base, conservée et testée séparément.</p><div class="backup-actions"><button class="btn" type="button" data-backup-download>Télécharger une sauvegarde JSON</button><label class="backup-file-label">Fichier de sauvegarde à fusionner<input type="file" data-backup-file accept="application/json,.json"></label><button class="table-action" type="button" data-backup-restore disabled>Fusionner la sauvegarde</button></div><p class="notification-empty">La restauration ajoute uniquement les enregistrements manquants de ce même établissement. Les données existantes et les paramètres de l’entreprise ne sont jamais remplacés. En cas de conflit, toute l’opération est annulée. Les sauvegardes contiennent des données personnelles : stockez-les en lieu sûr.</p><p class="error" data-backup-error role="alert"></p></section>`;
             const downloadButton = panel.querySelector('[data-backup-download]');
             const fileInput = panel.querySelector('[data-backup-file]');
             const restoreButton = panel.querySelector('[data-backup-restore]');
@@ -1808,7 +2000,9 @@
         try {
             const data = await api('/api/alerts'), count = $('#alert-count');
             count.textContent = data.total > 99 ? '99+' : data.total; count.hidden = !data.total;
-            $('#alerts-list').innerHTML = data.alerts.length ? data.alerts.map(item => `<button type="button" class="alert-item alert-${esc(item.severity)}" data-alert-page="${esc(item.page)}"><span aria-hidden="true">${alertIcons[item.severity] || 'ℹ️'}</span><span><b>${esc(item.title)}</b><small>${esc(item.message)}</small></span></button>`).join('') : '<p class="notification-empty">Aucune alerte pour le moment.</p>';
+            const alerts = data.alerts.filter(item => canAccessPage(item.page));
+            count.textContent = alerts.length > 99 ? '99+' : alerts.length; count.hidden = !alerts.length;
+            $('#alerts-list').innerHTML = alerts.length ? alerts.map(item => `<button type="button" class="alert-item alert-${esc(item.severity)}" data-alert-page="${esc(item.page)}"><span aria-hidden="true">${alertIcons[item.severity] || 'ℹ️'}</span><span><b>${esc(item.title)}</b><small>${esc(item.message)}</small></span></button>`).join('') : '<p class="notification-empty">Aucune alerte pour le moment.</p>';
         } catch (error) { $('#alerts-list').innerHTML = `<p class="notification-empty">${esc(error.message)}</p>`; }
     }
     const setAlertsOpen = open => { $('#alerts-panel').hidden = !open; $('#alerts-button').setAttribute('aria-expanded', String(open)); if (open) { $('#notifications-panel').hidden = true; loadAlerts(); } };

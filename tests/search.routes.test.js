@@ -13,7 +13,7 @@ test('general search validates its query and returns tenant-scoped module result
  t.after(()=>{db.execute=originalExecute;});
 
  const app=express();
- app.use((req,res,next)=>{req.tenantId=42;next();});
+ app.use((req,res,next)=>{req.tenantId=42;req.user={role:'OWNER'};next();});
  app.use('/api/search',searchRoutes);
  const server=app.listen(0);
  t.after(()=>new Promise(resolve=>server.close(resolve)));

@@ -1,7 +1,9 @@
 const r=require('express').Router(),db=require('../config/database'),{audit}=require('../services/audit.service'),{requireRole}=require('../middleware/auth');
 const canAccessPatientCoverage=requireRole('OWNER','ADMIN','PHARMACIST');
-const canReadInsurers=requireRole('OWNER','ADMIN','PHARMACIST','CASHIER');
+const canReadInsurers=requireRole('OWNER','ADMIN','PHARMACIST');
 const canManageInsurers=requireRole('OWNER','ADMIN');
+const {requireModuleAccess}=require('../middleware/module-access');
+r.use(requireModuleAccess('patients'));
 const fields={name:'name',contact_name:'contact_name',email:'email',phone:'phone',address:'address',notes:'notes'};
 const coverageStatuses=new Set(['active','inactive']);
 const insurerLengths={contact_name:180,email:190,phone:50,address:65535,notes:65535};
@@ -48,10 +50,7 @@ async function validateCoverageRelations(connection,tenantId,patientId,insurerId
 r.get('/',canReadInsurers,async(req,res,next)=>{
  try{
   const includeArchived=req.query.includeArchived==='1',archiveFilter=includeArchived?'':'AND i.is_active=1';
-  const cashier=req.user.role==='CASHIER';
-  const [rows]=cashier
-   ?await db.execute(`SELECT i.id,i.name FROM insurers i WHERE i.organization_id=? ${archiveFilter} ORDER BY i.name`,[req.tenantId])
-   :await db.execute(
+  const [rows]=await db.execute(
     `SELECT i.id,i.name,i.contact_name,i.email,i.phone,i.address,i.notes,i.is_active,i.created_at,
             COUNT(DISTINCT c.id) coverage_count
      FROM insurers i LEFT JOIN patient_insurance_coverages c

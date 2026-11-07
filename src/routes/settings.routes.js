@@ -5,6 +5,7 @@ const fs=require('fs/promises');
 const path=require('path');
 const {randomUUID}=require('crypto');
 const patientCode=require('../services/patient-code.service');
+const {hasFeature}=require('../middleware/plan-access');
 
 const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const logoDirectory=path.join(__dirname,'../../public/uploads/logos');
@@ -102,13 +103,31 @@ const logoTypes={
 r.get('/',async(req,res,next)=>{
  try{
   const [settings]=await db.execute(
-   `SELECT s.display_name,s.logo_url,s.primary_color,s.secondary_color,s.locale,s.currency,s.timezone,s.date_format,s.sales_tax_rate,s.qr_format,s.barcode_format,   s.default_label_format,s.patient_code_mode,s.patient_code_format,
+   `SELECT s.display_name,s.logo_url,s.primary_color,s.secondary_color,s.locale,s.currency,s.timezone,s.date_format,s.sales_tax_rate,s.separate_sale_payment,s.qr_format,s.barcode_format,   s.default_label_format,s.patient_code_mode,s.patient_code_format,
     o.name company_name,o.address company_address,o.phone company_phone,o.slogan company_slogan,o.email company_email
     FROM organizations o LEFT JOIN organization_settings s ON s.organization_id=o.id WHERE o.id=?`,
    [req.tenantId]
   );
   res.json(settings[0]||{});
  }catch(error){next(error);}
+});
+
+r.put('/sale-workflow',async(req,res,next)=>{
+ if(!isAdministrator(req))return res.status(403).json({error:'Seuls les propriétaires et administrateurs peuvent modifier le circuit de vente.'});
+ if(typeof req.body?.separate_sale_payment!=='boolean')return res.status(400).json({error:'Le mode de séparation doit être activé ou désactivé explicitement.'});
+ if(req.body.separate_sale_payment&&(!hasFeature(req.user,'sales')||!hasFeature(req.user,'cash')))return res.status(403).json({error:'Les modules ventes et caisse sont nécessaires pour activer ce circuit.'});
+ let connection;
+ try{
+  connection=await db.getConnection();await connection.beginTransaction();
+  await connection.execute('SELECT id FROM organizations WHERE id=? FOR UPDATE',[req.tenantId]);
+  const [rows]=await connection.execute('SELECT separate_sale_payment FROM organization_settings WHERE organization_id=? FOR UPDATE',[req.tenantId]);
+  const previous=Boolean(rows[0]?.separate_sale_payment),enabled=req.body.separate_sale_payment;
+  await connection.execute('INSERT INTO organization_settings(organization_id,separate_sale_payment) VALUES(?,?) ON DUPLICATE KEY UPDATE separate_sale_payment=VALUES(separate_sale_payment)',[req.tenantId,enabled]);
+  await connection.execute("INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,details_json) VALUES(?,?,'SALE_WORKFLOW_CHANGED','organization',?,?)",[req.tenantId,req.user.id,String(req.tenantId),JSON.stringify({before:previous,after:enabled})]);
+  await connection.commit();
+  res.json({message:'Circuit de vente enregistré. Les ventes existantes conservent leur règle initiale.',separate_sale_payment:enabled});
+ }catch(error){if(connection)await connection.rollback();next(error);}
+ finally{if(connection)connection.release();}
 });
 
 r.get('/backup',async(req,res,next)=>{
@@ -127,7 +146,8 @@ r.get('/backup',async(req,res,next)=>{
    tables[spec.name]=rows.map(normalizeBackup);
   }
   const [[organization]]=await connection.execute('SELECT name,address,phone,slogan,email FROM organizations WHERE id=?',[req.tenantId]);
-  const payload={format:'redams-tenant-backup',version:1,organization_id:req.tenantId,created_at:new Date().toISOString(),organization:normalizeBackup(organization),tables};
+  const payload={format:'redams-tenant-backup',version:1,organization_id:req.tenantId,created_at:new Date().toISOString(),organization:normalizeBackup(organization),
+   warnings:['Cette sauvegarde ne contient pas les dossiers ni les écritures comptables, ni les versions de révision. Utilisez également une sauvegarde complète de la base, conservée et testée séparément.'],tables};
   const output=JSON.stringify(payload);
   if(Buffer.byteLength(output,'utf8')>25*1024*1024){await connection.rollback();connection.release();connection=null;return res.status(413).json({error:'La sauvegarde dépasse la limite de 25 Mo.'});}
   await connection.commit();connection.release();connection=null;

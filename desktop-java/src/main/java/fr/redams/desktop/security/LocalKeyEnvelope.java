@@ -104,6 +104,7 @@ public final class LocalKeyEnvelope {
         if (recoveryCode == null || !recoveryCode.matches("[A-Za-z0-9_-]{43}")) {
             throw new IllegalArgumentException("Invalid recovery code format.");
         }
+
         byte[] key;
         try {
             key = Base64.getUrlDecoder().decode(recoveryCode);
@@ -118,6 +119,30 @@ public final class LocalKeyEnvelope {
             return verifyEnvelope(parsed, unwrap(parsed.recoveryWrapped, key, parsed.recoveryNonce, parsed.header, RECOVERY_CONTEXT));
         } finally {
             Arrays.fill(key, (byte) 0);
+        }
+    }
+
+    /**
+     * Replaces the password wrapping without changing the data or recovery key.
+     * The caller must persist the resulting envelope atomically.
+     */
+    public static byte[] resetPassword(byte[] envelope, String recoveryCode, char[] newPassword)
+            throws GeneralSecurityException {
+        validatePassword(newPassword);
+        Parsed parsed = parse(envelope);
+        byte[] dataKey = unlockWithRecovery(envelope, recoveryCode);
+        byte[] passwordKey = null;
+        try {
+            passwordKey = derivePasswordKey(newPassword, parsed.salt);
+            byte[] nonce = randomBytes(NONCE_SIZE);
+            byte[] wrapped = wrap(dataKey, passwordKey, nonce, parsed.header, PASSWORD_CONTEXT);
+            byte[] body = ByteBuffer.allocate(BODY_SIZE)
+                    .put(parsed.header).put(nonce).put(wrapped)
+                    .put(parsed.recoveryNonce).put(parsed.recoveryWrapped).array();
+            return ByteBuffer.allocate(ENVELOPE_SIZE).put(body).put(authenticate(body, dataKey)).array();
+        } finally {
+            Arrays.fill(dataKey, (byte) 0);
+            if (passwordKey != null) Arrays.fill(passwordKey, (byte) 0);
         }
     }
 

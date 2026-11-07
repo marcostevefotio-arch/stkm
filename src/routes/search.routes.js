@@ -1,5 +1,6 @@
 const r=require('express').Router(),db=require('../config/database');
 const {MODULE_KEYS,parseJson}=require('../config/pricing');
+const {canAccessModule}=require('../../public/js/access-policy');
 
 r.get('/',async(req,res,next)=>{
  try{
@@ -8,7 +9,7 @@ r.get('/',async(req,res,next)=>{
   if(query.length>100)return res.status(400).json({error:'La recherche est limitée à 100 caractères.'});
   const raw=req.user?.subscription_modules;
   const modules=raw===null||raw===undefined?MODULE_KEYS:parseJson(raw,[]);
-  const hasFeature=feature=>Array.isArray(modules)&&modules.includes(feature);
+  const hasFeature=feature=>Array.isArray(modules)&&modules.includes(feature)&&canAccessModule(req.user,feature);
   const term=`%${query}%`;
   let products=[],movements=[],alerts=[],suppliers=[],purchases=[],patients=[],insurers=[];
   if(hasFeature('stock')){
@@ -60,7 +61,7 @@ r.get('/',async(req,res,next)=>{
     [req.tenantId,term,term,term,term,term,term]
    );
   }
-  if(hasFeature('patients')){
+  if(hasFeature('patients')&&(!req.user||['OWNER','ADMIN','PHARMACIST'].includes(req.user.role))){
    [patients]=await db.execute(
     `SELECT id,patient_code,full_name,birth_date,gender,phone,email
      FROM patients WHERE organization_id=? AND is_active=1

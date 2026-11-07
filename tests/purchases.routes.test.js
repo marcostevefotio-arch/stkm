@@ -42,8 +42,8 @@ test('partial purchase receipt updates stock, movement history and order status 
   execute:async(sql,values)=>{
    queries.push({sql,values});
    if(sql.includes('SELECT id,reference,status FROM purchase_orders'))return [[{id:10,reference:null,status:'ordered'}],[]];
-   if(sql.includes('SELECT i.id,i.product_id'))return [[{id:20,product_id:30,quantity_ordered:'5.000',quantity_received:'0.000',product_name:'Produit test'}],[]];
-   if(sql.includes('SELECT quantity_on_hand FROM products'))return [[{quantity_on_hand:'2.000'}],[]];
+   if(sql.includes('SELECT i.id,i.product_id'))return [[{id:20,product_id:30,quantity_ordered:'5.000',quantity_received:'0.000',unit_cost:'8.00',product_name:'Produit test'}],[]];
+   if(sql.includes('SELECT quantity_on_hand,purchase_cost FROM products'))return [[{quantity_on_hand:'2.000',purchase_cost:'5.0000'}],[]];
    if(sql.includes('SELECT COUNT(*) pending'))return [[{pending:1}],[]];
    return [{affectedRows:1,insertId:50},[]];
   },
@@ -71,7 +71,7 @@ test('partial purchase receipt updates stock, movement history and order status 
  assert.equal(rolledBack,false);
  assert.equal(released,true);
  const stockUpdate=queries.find(query=>query.sql.startsWith('UPDATE products'));
- assert.deepEqual(stockUpdate.values,[2,30,42]);
+ assert.deepEqual(stockUpdate.values,[2,'6.5000',30,42]);
  const movement=queries.find(query=>query.sql.startsWith('INSERT INTO stock_movements'));
  assert.deepEqual(movement.values,[42,30,7,'IN',2,'CMD-10','Réception commande CMD-10.']);
  const statusUpdate=queries.find(query=>query.sql.startsWith('UPDATE purchase_orders SET status'));

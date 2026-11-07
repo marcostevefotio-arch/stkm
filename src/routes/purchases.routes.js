@@ -1,5 +1,8 @@
 const r=require('express').Router(),db=require('../config/database'),{audit}=require('../services/audit.service'),{requireRole}=require('../middleware/auth');
 const canManageProcurement=requireRole('OWNER','ADMIN','STOREKEEPER');
+const {requireModuleAccess}=require('../middleware/module-access');
+r.use(requireModuleAccess('procurement'));
+const {averageCost}=require('../services/stock-valuation.service');
 const validDate=value=>{
  if(!value)return true;
  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
@@ -142,7 +145,7 @@ r.post('/:id/receive',canManageProcurement,async(req,res,next)=>{
  const seen=new Set();
  for(const item of items){
   const id=Number(item.item_id),quantity=Number(item.quantity);
-  if(!Number.isSafeInteger(id)||id<=0||seen.has(id)||!Number.isFinite(quantity)||quantity<=0)return res.status(400).json({error:'Chaque ligne doit avoir un identifiant unique et une quantité valide.'});
+  if(!Number.isSafeInteger(id)||id<=0||seen.has(id)||!Number.isFinite(quantity)||quantity<=0||!/^\d{1,11}(?:\.\d{1,3})?$/.test(String(item.quantity)))return res.status(400).json({error:'Chaque ligne doit avoir un identifiant unique et une quantité valide à trois décimales maximum.'});
   seen.add(id);
  }
  let connection;
@@ -157,7 +160,7 @@ r.post('/:id/receive',canManageProcurement,async(req,res,next)=>{
   if(!['ordered','partially_received'].includes(orders[0].status)){await connection.rollback();connection.release();connection=null;return res.status(409).json({error:'La commande doit être confirmée avant réception.'});}
   for(const item of items){
    const [lines]=await connection.execute(
-    `SELECT i.id,i.product_id,i.quantity_ordered,i.quantity_received,p.name product_name
+    `SELECT i.id,i.product_id,i.quantity_ordered,i.quantity_received,i.unit_cost,p.name product_name
      FROM purchase_order_items i JOIN products p ON p.id=i.product_id
      WHERE i.id=? AND i.purchase_order_id=? FOR UPDATE`,
     [item.item_id,req.params.id]
@@ -165,9 +168,12 @@ r.post('/:id/receive',canManageProcurement,async(req,res,next)=>{
    if(!lines.length){await connection.rollback();connection.release();connection=null;return res.status(400).json({error:'Une ligne de commande est introuvable.'});}
    const line=lines[0],quantity=Number(item.quantity),remaining=Number(line.quantity_ordered)-Number(line.quantity_received);
    if(quantity>remaining){await connection.rollback();connection.release();connection=null;return res.status(409).json({error:`La quantité reçue dépasse le reste à livrer pour ${line.product_name}.`});}
-   const [products]=await connection.execute('SELECT quantity_on_hand FROM products WHERE id=? AND organization_id=? FOR UPDATE',[line.product_id,req.tenantId]);
+   const [products]=await connection.execute('SELECT quantity_on_hand,purchase_cost FROM products WHERE id=? AND organization_id=? FOR UPDATE',[line.product_id,req.tenantId]);
    if(!products.length){await connection.rollback();connection.release();connection=null;return res.status(404).json({error:'Produit introuvable dans cet établissement.'});}
-   await connection.execute('UPDATE products SET quantity_on_hand=quantity_on_hand+? WHERE id=? AND organization_id=?',[quantity,line.product_id,req.tenantId]);
+   let cost;
+   try{cost=averageCost(products[0].quantity_on_hand,products[0].purchase_cost,item.quantity,line.unit_cost);}
+   catch(error){if(error instanceof RangeError){await connection.rollback();connection.release();connection=null;return res.status(400).json({error:'Quantité ou coût incompatible avec la valorisation du stock.'});}throw error;}
+   await connection.execute('UPDATE products SET quantity_on_hand=quantity_on_hand+?,purchase_cost=? WHERE id=? AND organization_id=?',[quantity,cost,line.product_id,req.tenantId]);
    await connection.execute('UPDATE purchase_order_items SET quantity_received=quantity_received+? WHERE id=?',[quantity,line.id]);
    const reference=orders[0].reference||`CMD-${orders[0].id}`;
    await connection.execute(

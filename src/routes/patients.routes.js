@@ -3,6 +3,8 @@ const genders=new Set(['F','M','OTHER','UNSPECIFIED']);
 const historyStatuses=new Set(['ongoing','resolved','in_remission']);
 const canAccessMedicalHistory=requireRole('OWNER','ADMIN','PHARMACIST');
 const canManagePatients=requireRole('OWNER','ADMIN','PHARMACIST');
+const {requireModuleAccess}=require('../middleware/module-access');
+r.use(requireModuleAccess('patients'));
 const lengths={phone:50,email:190,address:65535};
 function validDate(value){
  if(value===undefined||value===null||value==='')return true;
@@ -44,10 +46,8 @@ async function findPatient(patientId,tenantId){
 
 r.get('/',async(req,res,next)=>{
  try{
-  const cashier=req.user.role==='CASHIER';
-  if(!cashier&&!['OWNER','ADMIN','PHARMACIST'].includes(req.user.role))return res.status(403).json({error:'Permission insuffisante pour consulter les dossiers patients.'});
-  const activeFilter=!cashier&&req.query.includeArchived==='1'?'':'AND is_active=1';
-  const columns=cashier?'id,patient_code,full_name':'id,patient_code,full_name,birth_date,gender,phone,email,address,is_active,created_at';
+  const activeFilter=req.query.includeArchived==='1'?'':'AND is_active=1';
+  const columns='id,patient_code,full_name,birth_date,gender,phone,email,address,is_active,created_at';
   const [rows]=await db.execute(
    `SELECT ${columns}
     FROM patients WHERE organization_id=? ${activeFilter}

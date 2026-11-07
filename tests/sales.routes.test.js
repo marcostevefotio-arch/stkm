@@ -41,7 +41,23 @@ test('sales API restricts sales and payment operations to authorized roles',asyn
  assert.equal(calls,0);
 });
 
-test('sale receipt, prescription proof, tax, stock and cash payment are recorded atomically',async(t)=>{
+test('cash payments require an explicit received amount on both sale and payment endpoints',async t=>{
+ const original=db.getConnection;let calls=0;
+ db.getConnection=async()=>{calls++;throw Error('Invalid cash input must not reach the database');};
+ t.after(()=>{db.getConnection=original;});
+ const url=await listen(appFor(),t);
+ for(const value of [undefined,null,'',' ',0,9,-1,'invalid']){
+  const payment={method:'cash',amount:10,...(value===undefined?{}:{cash_received:value})};
+  for(const endpoint of [url,`${url}/15/payments`]){
+   const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:[{product_id:3,quantity:1}],payments:[payment]})});
+   assert.equal(response.status,400);
+   assert.match((await response.json()).error,/espèces/);
+  }
+ }
+ assert.equal(calls,0);
+});
+
+for(const role of ['CASHIER','PHARMACIST'])test(`single-step ${role}: receipt, prescription proof, tax, stock and cash payment are recorded atomically`,async(t)=>{
  const originalGetConnection=db.getConnection,originalExecute=db.execute,queries=[];
  let committed=false,rolledBack=false,released=false;
  const connection={
@@ -52,18 +68,19 @@ test('sale receipt, prescription proof, tax, stock and cash payment are recorded
   execute:async(sql,values)=>{
    queries.push({sql,values});
    if(sql.includes('FROM cash_sessions')&&sql.includes("status='open'"))return [[{id:5,opening_cash:'100.00',opened_at:'2026-01-01 09:00:00'}],[]];
-   if(sql.includes('FROM products WHERE organization_id=? AND is_active=1'))return [[{id:3,sku:'SKU-3',name:'Produit test',unit:'boîte',quantity_on_hand:'8.000',sale_price:'10.00',prescription_required:1,max_customer_quantity:'2.000',minimum_purchase_interval_hours:null}],[]];
+   if(sql.includes('FROM products WHERE organization_id=? AND is_active=1'))return [[{id:3,sku:'SKU-3',name:'Produit test',unit:'boîte',quantity_on_hand:'8.000',sale_price:'10.00',purchase_cost:'3.1234',prescription_required:1,max_customer_quantity:'2.000',minimum_purchase_interval_hours:null}],[]];
    if(sql.includes('SELECT sales_tax_rate'))return [[{sales_tax_rate:'10.00'}],[]];
    if(sql.startsWith('INSERT INTO sales_invoices'))return [{insertId:70},[]];
    if(sql.includes('SELECT COALESCE((SELECT SUM(amount) FROM sales_payments'))return [[{paid:'0.00',refunded:'0.00',returned_value:'0.00'}],[]];
    if(sql.includes('SELECT i.total_amount'))return [[{total_amount:'11.00',paid:'11.00',refunded:'0.00',returned_value:'0.00'}],[]];
+   if(sql.includes('SELECT COALESCE(SUM(ri.refund_amount)'))return [[{returned_value:'0.00'}],[]];
    return [{affectedRows:1,insertId:90},[]];
   },
  };
  db.getConnection=async()=>connection;
  db.execute=async()=>[{affectedRows:1},[]];
  t.after(()=>{db.getConnection=originalGetConnection;db.execute=originalExecute;});
- const url=await listen(appFor(),t);
+ const url=await listen(appFor(role),t);
  const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
   items:[{product_id:3,quantity:1,prescription_provided:true}],
  prescription_image:{mime_type:'image/jpeg',data:Buffer.from([0xff,0xd8,0xff,0x01,0x02]).toString('base64')},
@@ -78,6 +95,8 @@ test('sale receipt, prescription proof, tax, stock and cash payment are recorded
  assert.equal(committed,true);assert.equal(rolledBack,false);assert.equal(released,true);
  const line=queries.find(query=>query.sql.startsWith('INSERT INTO sales_invoice_items'));
  assert.equal(line.values[10],1);assert.equal(line.values[11],true);
+ assert.equal(line.values[12],'3.1234');
+ assert.match(queries.find(query=>query.sql.includes('FROM products WHERE organization_id=? AND is_active=1')).sql,/purchase_cost[\s\S]*FOR UPDATE/);
  const prescription=queries.find(query=>query.sql.startsWith('INSERT INTO sales_invoice_prescriptions'));
  assert.equal(prescription.values[0],70);assert.equal(prescription.values[1],'image/jpeg');
  assert.deepEqual(prescription.values[2],Buffer.from([0xff,0xd8,0xff,0x01,0x02]));
@@ -140,16 +159,17 @@ test('pharmacists can retrieve a tenant-scoped prescription image without cachin
 });
 
 test('quantity and short-interval purchase checks are returned as review-only flags',async(t)=>{
- const originalGetConnection=db.getConnection,originalExecute=db.execute;
+ const originalGetConnection=db.getConnection,originalExecute=db.execute; let recordedCost;
  const connection={
   beginTransaction:async()=>{},commit:async()=>{},rollback:async()=>{},release:()=>{},
-  execute:async(sql)=>{
+  execute:async(sql,values)=>{
    if(sql.includes('FROM cash_sessions')&&sql.includes("status='open'"))return [[{id:5,opening_cash:'0.00'}],[]];
    if(sql.includes('FROM patients WHERE id=?'))return [[{id:8,full_name:'Patient test'}],[]];
-   if(sql.includes('FROM products WHERE organization_id=? AND is_active=1'))return [[{id:3,sku:'SKU-3',name:'Produit à surveiller',unit:'boîte',quantity_on_hand:'10.000',sale_price:'1.00',prescription_required:0,max_customer_quantity:'2.000',minimum_purchase_interval_hours:24}],[]];
+   if(sql.includes('FROM products WHERE organization_id=? AND is_active=1'))return [[{id:3,sku:'SKU-3',name:'Produit à surveiller',unit:'boîte',quantity_on_hand:'10.000',sale_price:'1.00',purchase_cost:null,prescription_required:0,max_customer_quantity:'2.000',minimum_purchase_interval_hours:24}],[]];
    if(sql.includes('SELECT sales_tax_rate'))return [[{sales_tax_rate:'0.00'}],[]];
    if(sql.includes('SELECT COALESCE(SUM(CASE WHEN TIMESTAMPDIFF'))return [[{recent_quantity:'1.000',recent_seconds:7200}],[]];
    if(sql.startsWith('INSERT INTO sales_invoices'))return [{insertId:71},[]];
+   if(sql.startsWith('INSERT INTO sales_invoice_items'))recordedCost=values[12];
    return [{affectedRows:1},[]];
   },
  };
@@ -160,6 +180,43 @@ test('quantity and short-interval purchase checks are returned as review-only fl
  assert.equal(response.status,201);
  const result=await response.json();
  assert.deepEqual(result.review_flags.map(flag=>flag.type),['short_interval','quantity_limit']);
+ assert.equal(recordedCost,null);
+});
+
+test('a missing historical cost column rolls back the sale rather than losing the snapshot',async(t)=>{
+ const originalGetConnection=db.getConnection, calls=[];
+ const connection={
+  beginTransaction:async()=>calls.push('begin'),commit:async()=>calls.push('commit'),
+  rollback:async()=>calls.push('rollback'),release:()=>calls.push('release'),
+  execute:async(sql)=>{
+   if(sql.includes('FROM cash_sessions'))return [[{id:5}],[]];
+   if(sql.includes('FROM products WHERE organization_id=? AND is_active=1'))return [[{id:3,sku:'S',name:'P',unit:'u',quantity_on_hand:'2.000',sale_price:'1.00',purchase_cost:'0.5000',prescription_required:0,max_customer_quantity:null,minimum_purchase_interval_hours:null}],[]];
+   if(sql.includes('SELECT sales_tax_rate'))return [[{sales_tax_rate:'0.00'}],[]];
+   if(sql.startsWith('INSERT INTO sales_invoices'))return [{insertId:71},[]];
+   if(sql.startsWith('INSERT INTO sales_invoice_items'))throw Error('Unknown column unit_purchase_cost');
+   return [{affectedRows:1},[]];
+  }
+ };
+ db.getConnection=async()=>connection;t.after(()=>{db.getConnection=originalGetConnection;});
+ const app=appFor();app.use((error,req,res,next)=>res.status(500).json({error:error.message}));
+ const url=await listen(app,t);
+ const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:[{product_id:3,quantity:1}]})});
+ assert.equal(response.status,500);assert.match((await response.json()).error,/Unknown column/);
+ assert.ok(calls.includes('rollback'));assert.ok(calls.includes('release'));assert.ok(!calls.includes('commit'));
+});
+
+test('invoice detail does not expose historical purchase cost to sales users',async t=>{
+ const originalExecute=db.execute;let itemQuery;
+ db.execute=async(sql)=>{
+  if(sql.includes('FROM sales_invoices i WHERE'))return [[{id:70}],[]];
+  if(sql.includes('SUM(ri.refund_amount)'))return [[{returned_value:'0.00'}],[]];
+  if(sql.includes('FROM sales_invoice_items WHERE')){itemQuery=sql;return [[],[]];}
+  return [[],[]];
+ };
+ t.after(()=>{db.execute=originalExecute;});
+ const url=await listen(appFor(),t);
+ assert.equal((await fetch(`${url}/70`)).status,200);
+ assert.ok(itemQuery);assert.doesNotMatch(itemQuery,/unit_purchase_cost|\*/);
 });
 
 test('a returned item is refunded from its receipt value and restocked in one transaction',async(t)=>{
@@ -176,6 +233,7 @@ test('a returned item is refunded from its receipt value and restocked in one tr
    if(sql.includes('SELECT COALESCE((SELECT SUM(amount) FROM sales_payments'))return [[{paid:'20.00',refunded:'0.00'}],[]];
    if(sql.startsWith('INSERT INTO sales_returns'))return [{insertId:99},[]];
    if(sql.includes('SELECT i.total_amount'))return [[{total_amount:'20.00',paid:'20.00',refunded:'10.00',returned_value:'10.00'}],[]];
+   if(sql.includes('SELECT COALESCE(SUM(ri.refund_amount)'))return [[{returned_value:'10.00'}],[]];
    return [{affectedRows:1,insertId:99},[]];
   },
  };
@@ -188,6 +246,7 @@ test('a returned item is refunded from its receipt value and restocked in one tr
  assert.equal(result.refund_amount,10);
  assert.equal(committed,true);
  assert.deepEqual(queries.find(query=>query.sql.startsWith('UPDATE products SET quantity_on_hand=quantity_on_hand+')).values,[1,3,42]);
+ assert.match(queries.find(query=>query.sql.startsWith('UPDATE products SET quantity_on_hand=quantity_on_hand+')).sql,/purchase_cost=NULL/);
  assert.equal(queries.some(query=>query.sql.startsWith('INSERT INTO stock_movements')&&query.sql.includes("'IN'")),true);
  assert.equal(queries.some(query=>query.sql.startsWith('INSERT INTO cash_movements')&&query.sql.includes("'refund'")),true);
 });

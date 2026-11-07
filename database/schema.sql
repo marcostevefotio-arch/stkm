@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS organizations (
 CREATE TABLE IF NOT EXISTS users (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, organization_id BIGINT UNSIGNED NOT NULL,
  full_name VARCHAR(180) NOT NULL, email VARCHAR(190) NOT NULL, password_hash VARCHAR(255) NOT NULL,
- role ENUM('OWNER','ADMIN','PHARMACIST','STOREKEEPER','CASHIER','VIEWER','SUPER_ADMIN') NOT NULL DEFAULT 'VIEWER',
+ role ENUM('OWNER','ADMIN','PHARMACIST','STOREKEEPER','CASHIER','VIEWER','SUPER_ADMIN','ACCOUNTANT') NOT NULL DEFAULT 'VIEWER',
  is_active BOOLEAN NOT NULL DEFAULT TRUE, password_version INT UNSIGNED NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
  UNIQUE KEY uq_user_tenant_email(organization_id,email), KEY idx_users_role_active(role,is_active),
  FOREIGN KEY(organization_id) REFERENCES organizations(id)
@@ -17,12 +17,36 @@ CREATE TABLE IF NOT EXISTS account_email_claims (
  email VARCHAR(190) PRIMARY KEY, user_id BIGINT UNSIGNED NULL UNIQUE,
  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS accounting_books (
+ organization_id BIGINT UNSIGNED PRIMARY KEY,
+ opening_date DATE NOT NULL,
+ accounts JSON NOT NULL,
+ created_by BIGINT UNSIGNED NOT NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ FOREIGN KEY(organization_id) REFERENCES organizations(id),
+ FOREIGN KEY(created_by) REFERENCES users(id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS accounting_entries (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ organization_id BIGINT UNSIGNED NOT NULL,
+ entry_date DATE NOT NULL,
+ kind ENUM('opening','normal') NOT NULL,
+ status ENUM('draft','posted') NOT NULL DEFAULT 'draft',
+ description VARCHAR(500) NOT NULL,
+ `lines` JSON NOT NULL,
+ created_by BIGINT UNSIGNED NOT NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ KEY idx_accounting_entries_tenant_date(organization_id,entry_date,id),
+ FOREIGN KEY(organization_id) REFERENCES accounting_books(organization_id),
+ FOREIGN KEY(created_by) REFERENCES users(id)
+) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS organization_settings (
  organization_id BIGINT UNSIGNED PRIMARY KEY, display_name VARCHAR(180), logo_url VARCHAR(500),
  primary_color CHAR(7) NOT NULL DEFAULT '#145C4B', secondary_color CHAR(7) NOT NULL DEFAULT '#D7A84B',
  locale VARCHAR(8) NOT NULL DEFAULT 'fr', currency CHAR(3) NOT NULL DEFAULT 'XAF',
  timezone VARCHAR(80) NOT NULL DEFAULT 'Africa/Douala', date_format VARCHAR(30) NOT NULL DEFAULT 'DD/MM/YYYY',
  sales_tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+ separate_sale_payment BOOLEAN NOT NULL DEFAULT FALSE,
  qr_format VARCHAR(30) NOT NULL DEFAULT 'QR', barcode_format VARCHAR(30) NOT NULL DEFAULT 'CODE128',
  default_label_format VARCHAR(20) NOT NULL DEFAULT 'barcode',
  patient_code_mode ENUM('auto','manual') NOT NULL DEFAULT 'manual',
@@ -143,6 +167,7 @@ CREATE TABLE IF NOT EXISTS products (
  sku VARCHAR(80) NOT NULL, barcode VARCHAR(120), name VARCHAR(190) NOT NULL, category VARCHAR(120),
  unit VARCHAR(40) NOT NULL DEFAULT 'unité', quantity_on_hand DECIMAL(14,3) NOT NULL DEFAULT 0,
  reorder_level DECIMAL(14,3) NOT NULL DEFAULT 0, sale_price DECIMAL(14,2) NOT NULL DEFAULT 0,
+ purchase_cost DECIMAL(18,4) NULL,
  prescription_required BOOLEAN NOT NULL DEFAULT FALSE,
  max_customer_quantity DECIMAL(14,3) NULL, minimum_purchase_interval_hours INT UNSIGNED NULL,
  is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -259,6 +284,7 @@ CREATE TABLE IF NOT EXISTS sales_invoices (
  tax_amount DECIMAL(14,2) NOT NULL DEFAULT 0, total_amount DECIMAL(14,2) NOT NULL,
  status ENUM('issued','partially_paid','paid','partially_returned','returned','cancelled') NOT NULL DEFAULT 'issued',
  review_flags JSON NULL, notes TEXT, created_by BIGINT UNSIGNED NOT NULL,
+ separate_cashier BOOLEAN NOT NULL DEFAULT FALSE,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
  UNIQUE KEY uq_sales_invoice_number(organization_id,invoice_number),
  KEY idx_sales_invoice_tenant_date(organization_id,created_at),
@@ -279,7 +305,7 @@ CREATE TABLE IF NOT EXISTS sales_invoice_items (
  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, invoice_id BIGINT UNSIGNED NOT NULL,
  product_id BIGINT UNSIGNED NOT NULL, sku VARCHAR(80) NOT NULL, product_name VARCHAR(190) NOT NULL,
  unit VARCHAR(40) NOT NULL, quantity DECIMAL(14,3) NOT NULL, returned_quantity DECIMAL(14,3) NOT NULL DEFAULT 0,
- unit_price DECIMAL(14,2) NOT NULL, line_subtotal DECIMAL(14,2) NOT NULL,
+ unit_price DECIMAL(14,2) NOT NULL, unit_purchase_cost DECIMAL(18,4) NULL, line_subtotal DECIMAL(14,2) NOT NULL,
  line_tax DECIMAL(14,2) NOT NULL, line_total DECIMAL(14,2) NOT NULL,
  prescription_required BOOLEAN NOT NULL DEFAULT FALSE, prescription_provided BOOLEAN NOT NULL DEFAULT FALSE,
  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

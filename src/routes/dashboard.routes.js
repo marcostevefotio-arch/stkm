@@ -1,9 +1,10 @@
 const r=require('express').Router(),db=require('../config/database');
 const {MODULE_KEYS,parseJson}=require('../config/pricing');
+const {canAccessModule}=require('../../public/js/access-policy');
 r.get('/',async(req,res,next)=>{try{
  const raw=req.user?.subscription_modules;
  const modules=raw===null||raw===undefined?MODULE_KEYS:parseJson(raw,[]);
- if(!Array.isArray(modules)||!modules.includes('stock'))return res.json({products:0,stockUnits:0,lowStock:0,movementsToday:0,stock_available:false});
+ if(!Array.isArray(modules)||!modules.includes('stock')||!canAccessModule(req.user,'stock'))return res.json({products:0,stockUnits:0,lowStock:0,movementsToday:0,stock_available:false});
  const t=req.tenantId;
  const [[p]]=await db.execute('SELECT COUNT(*) total FROM products WHERE organization_id=? AND is_active=1',[t]);
  const [[q]]=await db.execute('SELECT COALESCE(SUM(quantity_on_hand),0) total FROM products WHERE organization_id=? AND is_active=1',[t]);

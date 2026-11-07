@@ -8,6 +8,7 @@ app.use('/api/dashboard', authenticate, tenant, require('./routes/dashboard.rout
 app.use('/api/support', authenticate, tenant, require('./routes/support.routes'));
 app.use('/api/sales', authenticate, tenant, requireFeature('sales'), require('./routes/sales.routes')); app.use('/api/cash', authenticate, tenant, requireFeature('cash'), require('./routes/cash.routes'));
 app.use('/api/reports', authenticate, tenant, requireFeature('reports'), require('./routes/reports.routes'));
+app.use('/api/accounting', authenticate, tenant, requireFeature('reports'), require('./routes/accounting.routes'));
 app.use('/api/admin', authenticate, tenant, require('./routes/admin.routes'));
 app.get('/api/subscription/invoices', authenticate, tenant, async (req, res, next) => { try { if (!['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) return res.status(403).json({ error: 'Permission insuffisante.' }); const db = require('./config/database'); const [x] = await db.execute('SELECT invoice_number,period_start,period_end,subtotal,discount_amount,total_amount,currency,status,due_date,paid_at FROM platform_invoices WHERE organization_id=? ORDER BY created_at DESC,id DESC LIMIT 50', [req.tenantId]); res.json(x); } catch (e) { next(e); } });
 app.use('/api/alerts', authenticate, tenant, require('./routes/alerts.routes'));

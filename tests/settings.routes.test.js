@@ -189,6 +189,9 @@ test('tenant backup export is consistent and serializes prescription images',asy
  assert.match(response.headers.get('content-disposition'),/attachment; filename="redams-backup-42-/);
  const backup=await response.json();
  assert.equal(backup.organization_id,42);
+ assert.match(backup.warnings[0],/ne contient pas les dossiers ni les écritures comptables/);
+ assert.equal(backup.tables.accounting_books,undefined);
+ assert.equal(backup.tables.accounting_entries,undefined);
  assert.equal(backup.organization.name,'Clinique Test');
  assert.deepEqual(backup.tables.sales_invoice_prescriptions[0].image_data,{$binary:Buffer.from('prescription').toString('base64')});
  assert.equal(snapshotStarted,true);

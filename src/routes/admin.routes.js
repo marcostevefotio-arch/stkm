@@ -5,12 +5,17 @@ const {requireRole}=require('../middleware/auth');
 const {requireFeature}=require('../middleware/plan-access');
 
 const canAdminister=requireRole('OWNER','ADMIN');
-const roles=new Set(['OWNER','ADMIN','PHARMACIST','STOREKEEPER','CASHIER','VIEWER']);
+const roles=new Set(['OWNER','ADMIN','PHARMACIST','STOREKEEPER','CASHIER','VIEWER','ACCOUNTANT']);
 const privilegedRoles=new Set(['OWNER','ADMIN']);
 const idPattern=/^[1-9]\d{0,19}$/;
 const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const datePattern=/^\d{4}-\d{2}-\d{2}$/;
 const passwordValid=value=>typeof value==='string'&&value.length>=12&&value.length<=128;
+
+async function accountantRoleAvailable(connection){
+ const [columns]=await connection.execute("SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='role'");
+ return columns.length===1&&String(columns[0].COLUMN_TYPE).toLowerCase()==="enum('owner','admin','pharmacist','storekeeper','cashier','viewer','super_admin','accountant')";
+}
 
 function validDate(value){
  if(!datePattern.test(value))return false;
@@ -58,6 +63,10 @@ router.post('/users',canAdminister,async(req,res,next)=>{
   connection=await db.getConnection();
   await connection.beginTransaction();
   await connection.execute('SELECT id FROM organizations WHERE id=? FOR UPDATE',[req.tenantId]);
+  if(role==='ACCOUNTANT'&&!await accountantRoleAvailable(connection)){
+   await connection.rollback();
+   return res.status(409).json({error:'Le rôle expert-comptable nécessite la migration 2026110604_accountant_role.'});
+  }
   const [[subscription]]=await connection.execute(
    `SELECT COALESCE(s.max_users,p.max_users) max_users,(SELECT COUNT(*) FROM users u WHERE u.organization_id=s.organization_id AND u.is_active=TRUE AND u.role<>'SUPER_ADMIN') active_users
     FROM subscriptions s JOIN plans p ON p.id=s.plan_id
@@ -106,6 +115,10 @@ router.patch('/users/:id',canAdminister,async(req,res,next)=>{
   );
   if(!found.length){await connection.rollback();return res.status(404).json({error:'Utilisateur introuvable dans cet établissement.'});}
   const current=found[0],nextRole=hasRole?role:current.role,nextActive=hasActive?body.is_active:Boolean(current.is_active);
+  if(hasRole&&nextRole==='ACCOUNTANT'&&!await accountantRoleAvailable(connection)){
+   await connection.rollback();
+   return res.status(409).json({error:'Le rôle expert-comptable nécessite la migration 2026110604_accountant_role.'});
+  }
   if(Number(current.id)===Number(req.user.id)&&(nextRole!==current.role||!nextActive)){
    await connection.rollback();
    return res.status(409).json({error:'Vous ne pouvez pas modifier votre propre rôle ni désactiver votre compte.'});

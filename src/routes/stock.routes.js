@@ -1,5 +1,7 @@
 const r=require('express').Router(),db=require('../config/database'),{audit}=require('../services/audit.service'),{requireRole}=require('../middleware/auth');
 const canManageInventory=requireRole('OWNER','ADMIN','STOREKEEPER','SUPER_ADMIN');
+const {requireModuleAccess}=require('../middleware/module-access');
+r.use(requireModuleAccess('stock'));
 const canValidate=requireRole('OWNER','ADMIN','SUPER_ADMIN');
 const documentMovement=/^(Vente |Retour facture|Annulation de la facture|Réception commande|Stock initial)/;
 const signs={IN:1,OUT:-1};
@@ -50,7 +52,7 @@ r.post('/corrections/:id/approve',canValidate,async(req,res,next)=>{
   if(!ps.length){await c.rollback();return res.status(404).json({error:'Produit introuvable.'});}
   const delta=(signs[mv.movement_type]||0)*(Number(cr.new_quantity)-Number(mv.quantity)),next=Number(ps[0].quantity_on_hand)+delta;
   if(next<0){await c.rollback();return res.status(409).json({error:'Stock insuffisant pour appliquer cette correction.'});}
-  if(delta)await c.execute('UPDATE products SET quantity_on_hand=? WHERE id=? AND organization_id=?',[next,mv.product_id,req.tenantId]);
+  if(delta)await c.execute('UPDATE products SET quantity_on_hand=?,purchase_cost=NULL WHERE id=? AND organization_id=?',[next,mv.product_id,req.tenantId]);
   await c.execute('UPDATE stock_movements SET quantity=?,reference=?,notes=? WHERE id=? AND organization_id=?',[cr.new_quantity,cr.new_reference,cr.new_notes,mv.id,req.tenantId]);
   await c.execute("UPDATE stock_movement_corrections SET status='approved',validated_by=?,validated_at=NOW(),old_quantity=?,old_reference=?,old_notes=? WHERE id=?",[req.user.id,mv.quantity,mv.reference,mv.notes,cr.id]);
   await c.commit();
@@ -73,7 +75,7 @@ r.post('/movements',canManageInventory,async(req,res,next)=>{const b=req.body||{
  if(!p.length){await c.rollback();return res.status(404).json({error:'Produit introuvable dans cet établissement.'});}
  const current=Number(p[0].quantity_on_hand),next=b.movement_type==='ADJUSTMENT'?qty:current+(b.movement_type==='IN'?qty:-qty);
  if(next<0){await c.rollback();return res.status(409).json({error:'Stock insuffisant.'});}
- await c.execute('UPDATE products SET quantity_on_hand=? WHERE id=? AND organization_id=?',[next,b.product_id,req.tenantId]);
+ await c.execute('UPDATE products SET quantity_on_hand=?,purchase_cost=IF(? > 0,NULL,purchase_cost) WHERE id=? AND organization_id=?',[next,next-current,b.product_id,req.tenantId]);
  const [x]=await c.execute('INSERT INTO stock_movements(organization_id,product_id,user_id,movement_type,quantity,reference,notes) VALUES(?,?,?,?,?,?,?)',[req.tenantId,b.product_id,req.user.id,b.movement_type,qty,b.reference||null,b.notes||null]);
  await c.commit();await audit({tenantId:req.tenantId,userId:req.user.id,action:'STOCK_MOVEMENT',entityType:'stock_movement',entityId:x.insertId});res.status(201).json({id:x.insertId,quantity_on_hand:next});
  }catch(e){await c.rollback();next(e);}finally{c.release();}});module.exports=r;

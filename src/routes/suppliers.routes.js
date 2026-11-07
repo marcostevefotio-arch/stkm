@@ -1,5 +1,7 @@
 const r=require('express').Router(),db=require('../config/database'),{audit}=require('../services/audit.service'),{requireRole}=require('../middleware/auth');
 const canManageProcurement=requireRole('OWNER','ADMIN','STOREKEEPER');
+const {requireModuleAccess}=require('../middleware/module-access');
+r.use(requireModuleAccess('procurement'));
 const fields={name:'name',contact_name:'contact_name',email:'email',phone:'phone',address:'address',notes:'notes'};
 
 r.get('/',async(req,res,next)=>{

@@ -6,7 +6,7 @@ const reportsRoutes=require('../src/routes/reports.routes');
 
 async function listen(t){
  const app=express();
- app.use((req,res,next)=>{req.tenantId=42;next();});
+ app.use((req,res,next)=>{req.tenantId=42;req.user={role:'OWNER'};next();});
  app.use('/api/reports',reportsRoutes);
  const server=app.listen(0);
  t.after(()=>new Promise(resolve=>server.close(resolve)));
