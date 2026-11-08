@@ -7,6 +7,7 @@ const { getUsage } = require('../services/tenant-usage.service');
 const { DEFAULT_PROGRAM, getProgram, recordPaidInvoiceCommission } = require('../services/partner-commission.service');
 const databaseUpgrade = require('../services/database-upgrade.service');
 const { MODULES, MODULE_KEYS } = require('../config/pricing');
+const { DOCUMENTS: LEGAL_DOCUMENTS, loadLegalSettings, normalizeLegalSettings } = require('../config/legal-documents');
 const { STAFF_ROLES, canWrite, portalSecret, generateApiToken, validateShifts, isOnDuty, normalizeTime } = require('../config/portal-access');
 
 const validId = value => /^[1-9]\d{0,19}$/.test(String(value || ''));
@@ -398,6 +399,41 @@ router.patch('/admin/promotions/:id', requireAdmin, async (req, res, next) => {
 router.get('/admin/settings', requireAdmin, async (req, res, next) => {
     try { res.json({ settings: await getProgram(db) }); }
     catch (error) { next(error); }
+});
+
+router.get('/admin/legal-documents', requireAdmin, async (req, res, next) => {
+    try { res.json(await loadLegalSettings(db)); }
+    catch (error) { next(error); }
+});
+
+router.put('/admin/legal-documents', requireAdmin, async (req, res, next) => {
+    const body=req.body||{};
+    const documents=body.documents;
+    if(typeof body.show_public_links!=='boolean'||typeof body.show_authenticated_links!=='boolean'||
+       !Array.isArray(documents)||documents.length!==LEGAL_DOCUMENTS.length||
+       documents.some((document,index)=>document?.id!==LEGAL_DOCUMENTS[index].id||
+        typeof document.title!=='string'||document.title.trim().length<2||document.title.trim().length>180||
+        typeof document.content!=='string'||document.content.trim().length<20||document.content.length>60000)){
+        return res.status(400).json({error:'Vérifiez les options d’affichage, les titres et le contenu des trois documents.'});
+    }
+    const settings=normalizeLegalSettings({
+        show_public_links:body.show_public_links,
+        show_authenticated_links:body.show_authenticated_links,
+        documents:documents.map(document=>({id:document.id,title:document.title.trim(),content:document.content.trim()}))
+    });
+    try{
+        await db.execute(
+            `INSERT INTO platform_settings(setting_key,setting_value) VALUES('legal_documents',?)
+             ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)`,
+            [JSON.stringify(settings)]
+        );
+        await audit(req,'LEGAL_DOCUMENTS_UPDATED','settings','legal_documents',null,{
+            show_public_links:settings.show_public_links,
+            show_authenticated_links:settings.show_authenticated_links,
+            documents:settings.documents.map(({id,title,version})=>({id,title,version}))
+        });
+        res.json({...settings,message:'Documents et options d’affichage enregistrés.'});
+    }catch(error){next(error);}
 });
 
 router.put('/admin/settings', requireAdmin, async (req, res, next) => {

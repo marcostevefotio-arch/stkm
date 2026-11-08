@@ -31,9 +31,25 @@ test('public portal, signup, login and application routes serve their pages', as
   assert.equal(signupResponse.status, 200);
   assert.match(signupHtml, /id="signupForm"/);
   assert.match(signupHtml, /id="signupCart"/);
+  assert.match(signupHtml, /name="accept_legal_documents" required/);
+  assert.match(signupHtml, /href="\/conditions-generales"/);
+  assert.match(signupHtml, /href="\/politique-confidentialite"/);
+  assert.match(signupHtml, /href="\/accord-traitement-donnees"/);
   const signupScript = await fetch(`${baseUrl}/js/signup.js`);
   assert.equal(signupScript.status, 200);
   assert.match(signupScript.headers.get('content-type'), /javascript/);
+  const legalScript = await fetch(`${baseUrl}/js/legal-documents.js`);
+  assert.equal(legalScript.status, 200);
+  assert.match(legalScript.headers.get('content-type'), /javascript/);
+  for (const [route, heading] of [
+    ['/conditions-generales', /Conditions générales/],
+    ['/politique-confidentialite', /Politique de Confidentialité/],
+    ['/accord-traitement-donnees', /Accord sur le Traitement des Données/],
+  ]) {
+    const legalResponse = await fetch(`${baseUrl}${route}`);
+    assert.equal(legalResponse.status, 200);
+    assert.match(await legalResponse.text(), heading);
+  }
   const portalScript = await fetch(`${baseUrl}/js/portal.js`);
   assert.equal(portalScript.status, 200);
   assert.match(await portalScript.text(), /data-pricing-term/);

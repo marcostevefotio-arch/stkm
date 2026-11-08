@@ -24,6 +24,7 @@
         catch { return {}; }
     };
     const query = new URLSearchParams(location.search);
+    let legalSettings;
     let requestedPromotion = query.get('promotion');
     const partnerCodeField = document.getElementById('partnerCode');
     partnerCodeField.value = (query.get('ref') || '').toUpperCase();
@@ -138,11 +139,17 @@
     async function boot() {
         document.getElementById('currentYear').textContent = String(new Date().getFullYear());
         try {
-            const response = await fetch('/api/public/catalog', { headers: { Accept: 'application/json' } });
-            let data;
-            try { data = await response.json(); } catch { throw Error('Le catalogue reçu est illisible. Actualisez la page.'); }
-            if (!response.ok) throw Error(data.error || 'Impossible de charger les offres.');
+            const [catalogResponse, legalResponse] = await Promise.all([
+                fetch('/api/public/catalog', { headers: { Accept: 'application/json' } }),
+                fetch('/api/public/legal-documents', { headers: { Accept: 'application/json' } })
+            ]);
+            let data, legal;
+            try { data = await catalogResponse.json(); } catch { throw Error('Le catalogue reçu est illisible. Actualisez la page.'); }
+            try { legal = await legalResponse.json(); } catch { throw Error('Les documents légaux reçus sont illisibles. Actualisez la page.'); }
+            if (!catalogResponse.ok) throw Error(data.error || 'Impossible de charger les offres.');
+            if (!legalResponse.ok) throw Error(legal.error || 'Impossible de charger les documents légaux.');
             catalog = data;
+            legalSettings = legal;
             if (!catalog.plans.length) throw Error('Aucun forfait n’est ouvert à la souscription pour le moment.');
             planSelect.innerHTML = catalog.plans.map(plan => `<option value="${safeText(plan.id)}">${safeText(plan.name)}${plan.plan_type === 'customized' ? ' · à la carte' : ''}</option>`).join('');
             if (query.has('plan') && catalog.plans.some(plan => String(plan.id) === query.get('plan'))) planSelect.value = query.get('plan');
@@ -169,6 +176,8 @@
         }
         const values = Object.fromEntries(new FormData(form));
         values.accept_terms = form.elements.accept_terms.checked;
+        values.accept_legal_documents = form.elements.accept_legal_documents.checked;
+        values.legal_document_versions = Object.fromEntries(legalSettings.documents.map(document => [document.id, document.version]));
         values.promotion_id = values.promotion_id || null;
         if (modules) values.selected_modules = modules;
         submit.disabled = true;

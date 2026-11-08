@@ -1,5 +1,5 @@
 (() => {
-    const token = sessionStorage.getItem('redams_token'); if (!token) { location.replace('/'); return; } const $ = s => document.querySelector(s), H = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, state = { products: [], settings: {}, modules: null };
+    const token = sessionStorage.getItem('redams_token'); if (!token) { location.replace('/'); return; } const $ = s => document.querySelector(s), H = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, state = { products: [], settings: {}, modules: null, legalSettings: null };
     async function api(url, opt = {}) { let r; try { r = await fetch(url, { ...opt, headers: { ...H, ...opt.headers } }); } catch (error) { if (error.name === 'AbortError') throw Error('La requête a expiré. Réessayez dans quelques instants.'); if (error instanceof TypeError) throw Error('Connexion au serveur impossible. Vérifiez votre réseau puis réessayez.'); throw Error('Une erreur inattendue a interrompu la requête. Réessayez.'); } if (r.status === 401) { sessionStorage.removeItem('redams_token'); location.replace('/'); throw Error('Session invalide ou expirée.'); } let d; try { d = (r.headers.get('content-type') || '').includes('json') ? await r.json() : await r.blob(); } catch (error) { throw Error('Le serveur a renvoyé une réponse illisible. Réessayez ou contactez votre administrateur.'); } if (!r.ok) { const failure = Error(d.error || 'La requête n’a pas pu aboutir.'); failure.status = r.status; throw failure; } return d; }
     function toast(t, type) { const message = String(t), normalized = message.toLocaleLowerCase('fr'); const kind = type || (/à vérifier|a vérifier|vérifiez|vérification professionnelle|signalement|récurrence|récidive|aucun produit actif|une commande doit contenir|une vente doit contenir/.test(normalized) ? 'warning' : /erreur|échec|echec|impossible|invalide|non autoris|inconnu|introuvable|indisponible|refus|échoué|failed|invalid|forbidden|expired|requis|requise|obligatoire|doit|doivent|aucun|aucune|n'est pas|n’est pas|sélectionnez|ajoutez|caisse est fermée|insuffisant|manquant/.test(normalized) ? 'error' : 'success'); const element = $('#toast'); element.textContent = message; element.classList.remove('toast-success', 'toast-warning', 'toast-error'); element.classList.add(`toast-${kind}`, 'show'); setTimeout(() => element.classList.remove('show'), 2400); }
     function updateSidebarClock() { const now = new Date(); $('#sidebar-date').textContent = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'full' }).format(now); $('#sidebar-time').textContent = new Intl.DateTimeFormat('fr-FR', { timeStyle: 'medium' }).format(now); }
@@ -79,6 +79,8 @@
             }
             const [settingsData, subscription] = await Promise.all([api('/api/settings'), api('/api/subscription')]);
             state.settings = settingsData;
+            try { state.legalSettings = await api('/api/public/legal-documents'); }
+            catch (error) { console.error('Chargement des préférences des documents légaux impossible.', error); }
             if (settingsData.primary_color) document.documentElement.style.setProperty('--primary', settingsData.primary_color);
             if (settingsData.secondary_color) document.documentElement.style.setProperty('--accent', settingsData.secondary_color);
             updateTenantLogo(settingsData.logo_url);
@@ -191,7 +193,8 @@
         closeOpenModals();
         const settingsPage = page.startsWith('settings/');
         const accessPage = page.startsWith('global-search') ? 'global-search' : settingsPage && page !== 'settings/patients' ? page.slice('settings/'.length) : page;
-        if (!canAccessPage(accessPage)) {
+        const legalDocumentsAccess = settingsPage && accessPage === 'legal-documents' && state.legalSettings?.show_authenticated_links;
+        if (!canAccessPage(accessPage) && !legalDocumentsAccess) {
             toast('Vous n’avez pas accès à ce module.', 'error');
             page = state.role === 'ACCOUNTANT' ? 'accounting-results' : 'dashboard';
         } else if (settingsPage) {
@@ -235,7 +238,7 @@
             document.querySelectorAll('[data-page]').forEach(link => { link.classList.remove('active'); link.removeAttribute('aria-current'); });
             $('#title').textContent = 'Recherche générale'; $('#global-search-input').value = searchTerm; location.hash = searchTerm ? `global-search?q=${encodeURIComponent(searchTerm)}` : 'global-search'; searchPage($('#content'), searchTerm); return;
         }
-        const settingsTabs = ['settings', 'tax', 'workflow', 'roles', 'backup', 'security', 'codes', 'search'];
+        const settingsTabs = ['settings', 'tax', 'workflow', 'roles', 'backup', 'security', 'codes', 'search', 'legal-documents'];
         if (settingsTabs.includes(page) || (settingsPage && page === 'patients')) { const activeTab = page === 'settings' ? 'general' : page; document.querySelectorAll('[data-page]').forEach(a => { const active = a.dataset.page === 'settings' || (page === 'security' && a.dataset.page === 'security'); a.classList.toggle('active', active); if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }); $('#title').textContent = 'Paramètres'; location.hash = page === 'settings' ? 'settings' : `settings/${page}`; settings($('#content'), activeTab); return; }
         if (page === 'insurers' || page.startsWith('insurers/')) {
             const activeTab = page === 'insurers/coverages' ? 'coverages' : 'organizations';
@@ -1914,9 +1917,9 @@
         form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; const body = { movement_type: type, payment_method: form.elements.payment_method.value, amount: form.elements.amount.value, description: form.elements.description.value }; try { await api('/api/cash/movements', { method: 'POST', body: JSON.stringify(body) }); modal.remove(); toast(type === 'income' ? 'Recette enregistrée.' : 'Dépense enregistrée.'); await cashRegister(root); } catch (reason) { error.textContent = reason.message; } };
     }
     async function settings(root, activeTab = 'general') {
-        const tabs = [['general', 'Généraux & identité'], ['workflow', 'Circuit de vente'], ['roles', 'Fusion des rôles'], ['tax', 'Fiscalité & reçus'], ['patients', 'Dossiers patients'], ['backup', 'Sauvegarde & restauration'], ['security', 'Sécurité & mot de passe'], ['codes', 'QR & codes-barres'], ['search', 'Index de recherche']].filter(([id]) => state.canAdminister || id === 'security');
+        const tabs = [['general', 'Généraux & identité'], ['workflow', 'Circuit de vente'], ['roles', 'Fusion des rôles'], ['tax', 'Fiscalité & reçus'], ['patients', 'Dossiers patients'], ['backup', 'Sauvegarde & restauration'], ['security', 'Sécurité & mot de passe'], ['codes', 'QR & codes-barres'], ['search', 'Index de recherche'], ...(state.legalSettings?.show_authenticated_links ? [['legal-documents', 'Documents légaux']] : [])].filter(([id]) => state.canAdminister || id === 'security' || id === 'legal-documents');
         if (!tabs.some(([id]) => id === activeTab)) activeTab = 'general';
-        if (!state.canAdminister && activeTab !== 'security') { root.innerHTML = '<div class="panel"><h3>Accès réservé</h3><p class="error" role="alert">Les paramètres de l’établissement sont réservés aux propriétaires et administrateurs.</p></div>'; return; }
+        if (!state.canAdminister && activeTab !== 'security' && activeTab !== 'legal-documents') { root.innerHTML = '<div class="panel"><h3>Accès réservé</h3><p class="error" role="alert">Les paramètres de l’établissement sont réservés aux propriétaires et administrateurs.</p></div>'; return; }
         root.innerHTML = `<div class="settings-page"><div class="settings-tabs" role="tablist" aria-label="Sections des paramètres">${tabs.map(([id, label]) => `<button type="button" class="settings-tab${activeTab === id ? ' active' : ''}" role="tab" aria-selected="${activeTab === id}" data-settings-tab="${id}">${label}</button>`).join('')}</div><div id="settings-panel" role="tabpanel"></div></div>`;
         const panel = $('#settings-panel');
         root.querySelectorAll('[data-settings-tab]').forEach(button => button.addEventListener('click', () => { settings(root, button.dataset.settingsTab); location.hash = button.dataset.settingsTab === 'general' ? 'settings' : `settings/${button.dataset.settingsTab}`; }));
@@ -1959,6 +1962,14 @@
                 };
                 $('#settings').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget, d = Object.fromEntries(new FormData(form)), error = form.querySelector('.error'); error.textContent = ''; try { await api('/api/settings', { method: 'PUT', body: JSON.stringify(d) }); state.settings = { ...state.settings, ...d }; if (d.primary_color) document.documentElement.style.setProperty('--primary', d.primary_color); if (d.secondary_color) document.documentElement.style.setProperty('--accent', d.secondary_color); toast('Paramètres enregistrés.'); } catch (reason) { error.textContent = reason.message; } };
             } catch (e) { if (panel.isConnected) panel.innerHTML = `<div class="panel"><p class="error">${esc(e.message)}</p></div>`; }
+            return;
+        }
+        if (activeTab === 'legal-documents') {
+            if (!state.legalSettings?.show_authenticated_links) {
+                panel.innerHTML = '<section class="panel"><h3>Documents légaux</h3><p>La consultation des documents dans l’espace connecté est désactivée par l’administrateur de la plateforme.</p></section>';
+                return;
+            }
+            panel.innerHTML = `<section class="panel settings"><small>DOCUMENTS DE LA PLATEFORME</small><h3>Documents légaux</h3><p>Consultez les documents applicables au service REDAMS-STK.</p><ul>${state.legalSettings.documents.map(document => `<li><a href="${esc(document.route)}" target="_blank" rel="noopener">${esc(document.title)}</a></li>`).join('')}</ul></section>`;
             return;
         }
         if (activeTab === 'patients') {

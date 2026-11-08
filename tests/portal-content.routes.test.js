@@ -36,6 +36,39 @@ test('FAQ and training management is limited to platform administrators', async 
     assert.equal(calls.some(call => call.sql.includes('platform_faqs') || call.sql.includes('platform_trainings')), false);
 });
 
+test('legal-document settings can only be read and edited by platform administrators',async t=>{
+ const support=await setup(t,'SUPPORT');
+ assert.equal((await fetch(`${support.base}/legal-documents`,{headers:support.headers})).status,403);
+ const admin=await setup(t,'PLATFORM_ADMIN');
+ const current=await fetch(`${admin.base}/legal-documents`,{headers:admin.headers});
+ assert.equal(current.status,200);
+ const settings=await current.json();
+ assert.equal(settings.show_public_links,true);
+ assert.equal(settings.show_authenticated_links,false);
+ const body={
+  show_public_links:false,
+  show_authenticated_links:true,
+  documents:settings.documents.map(document=>({...document,title:`${document.title} modifié`,content:`# Section modifiée\n\n${document.content}`}))
+ };
+ const updated=await fetch(`${admin.base}/legal-documents`,{
+  method:'PUT',headers:admin.headers,body:JSON.stringify(body)
+ });
+ assert.equal(updated.status,200);
+ const result=await updated.json();
+ assert.equal(result.show_public_links,false);
+ assert.equal(result.show_authenticated_links,true);
+ assert.match(result.documents[0].version,/^[a-f0-9]{64}$/);
+ const save=admin.calls.find(call=>call.sql.includes("VALUES('legal_documents',?)"));
+ assert.ok(save);
+ const saved=JSON.parse(save.values[0]);
+ assert.equal(saved.documents[0].title,'Conditions générales modifié');
+ assert.ok(admin.calls.some(call=>call.sql.includes('platform_audit_logs')&&call.values.includes('LEGAL_DOCUMENTS_UPDATED')));
+ const invalid=await fetch(`${admin.base}/legal-documents`,{
+  method:'PUT',headers:admin.headers,body:JSON.stringify({...body,documents:[]})
+ });
+ assert.equal(invalid.status,400);
+});
+
 test('platform administrators create validated FAQ entries with an audit record', async t => {
     const { base, headers, calls } = await setup(t, 'PLATFORM_ADMIN');
     const invalid = await fetch(`${base}/faqs`, { method: 'POST', headers, body: JSON.stringify({ question: 'x', answer: 'y', category: 'Z', sort_order: 1, is_active: true }) });

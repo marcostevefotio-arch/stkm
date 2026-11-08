@@ -1,1 +1,5 @@
-node_modules/\n.env\nstorage/*\n!storage/.gitkeep\n*.log\n
+node_modules/
+.env
+storage/*
+!storage/.gitkeep
+*.log

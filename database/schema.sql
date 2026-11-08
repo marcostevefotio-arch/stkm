@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS organization_settings (
  timezone VARCHAR(80) NOT NULL DEFAULT 'Africa/Douala', date_format VARCHAR(30) NOT NULL DEFAULT 'DD/MM/YYYY',
  sales_tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
  separate_sale_payment BOOLEAN NOT NULL DEFAULT FALSE,
+ merge_pharmacist_storekeeper BOOLEAN NOT NULL DEFAULT FALSE,
  qr_format VARCHAR(30) NOT NULL DEFAULT 'QR', barcode_format VARCHAR(30) NOT NULL DEFAULT 'CODE128',
  default_label_format VARCHAR(20) NOT NULL DEFAULT 'barcode',
  patient_code_mode ENUM('auto','manual') NOT NULL DEFAULT 'manual',

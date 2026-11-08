@@ -1,10 +1,10 @@
--- REDAMS-STK: MySQL 8, migrations 2026110501 through 2026110701.
+-- REDAMS-STK: MySQL 8, migrations 2026110501 through 2026110702.
 -- Select the EXISTING database before executing this file.
 -- Stop application writes and create/test an external SQL backup first.
 -- Set the exact database name and confirm the backup below.
 -- This file never resets tables, seeds data or rewrites business rows.
 -- DDL is not transactional: on failure, keep the backup and inspect the schema.
--- This covers the seven versioned migrations, not an arbitrary legacy schema.
+-- This covers the eight versioned migrations, not an arbitrary legacy schema.
 -- The portal migration history is intentionally left untouched.
 SET @redams_expected_database = NULL;
 SET @redams_backup_confirmed = 0;
@@ -36,6 +36,7 @@ BEGIN
               ["products","purchase_cost","decimal(18,4)","YES",null,"DECIMAL(18,4) NULL"],
               ["sales_invoice_items","unit_purchase_cost","decimal(18,4)","YES",null,"DECIMAL(18,4) NULL"],
               ["organization_settings","separate_sale_payment","tinyint(1)","NO","0","TINYINT(1) NOT NULL DEFAULT 0"],
+              ["organization_settings","merge_pharmacist_storekeeper","tinyint(1)","NO","0","TINYINT(1) NOT NULL DEFAULT 0"],
               ["sales_invoices","separate_cashier","tinyint(1)","NO","0","TINYINT(1) NOT NULL DEFAULT 0"]]',
             '$[*]' COLUMNS(
                 table_name VARCHAR(64) PATH '$[0]',

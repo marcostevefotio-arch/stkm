@@ -4,6 +4,7 @@ const express=require('express');
 const jwt=require('jsonwebtoken');
 const db=require('../src/config/database');
 const publicRoutes=require('../src/routes/public.routes');
+const {normalizeLegalSettings}=require('../src/config/legal-documents');
 
 async function listen(t){
  const app=express();
@@ -56,6 +57,29 @@ test('public catalog exposes active plans, promotions and published FAQ',async t
  assert.equal(statements.length,3);
 });
 
+test('public legal documents expose editable text, visibility settings and stable versions',async t=>{
+ const originalExecute=db.execute;
+ const saved=normalizeLegalSettings({
+  show_public_links:false,
+  show_authenticated_links:true,
+  documents:[{id:'conditions-generales',title:'Conditions clients',content:'# Conditions personnalisées\n\nContenu personnalisé suffisamment long.'}]
+ });
+ db.execute=async(sql,values)=>{
+  assert.match(sql,/platform_settings/);
+  return [[{setting_value:JSON.stringify(saved)}],[]];
+ };
+ t.after(()=>{db.execute=originalExecute;});
+ const url=await listen(t),response=await fetch(`${url}/legal-documents`);
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('cache-control'),'no-store');
+ const result=await response.json();
+ assert.equal(result.show_public_links,false);
+ assert.equal(result.show_authenticated_links,true);
+ assert.equal(result.documents[0].title,'Conditions clients');
+ assert.equal(result.documents[0].content,'# Conditions personnalisées\n\nContenu personnalisé suffisamment long.');
+ assert.match(result.documents[0].version,/^[a-f0-9]{64}$/);
+});
+
 test('public catalog keeps plans priced only annually or biennially',async t=>{
  const originalExecute=db.execute;
  db.execute=async sql=>{
@@ -99,6 +123,70 @@ test('public catalog exposes purchasable Starter, Ultimate and Customized plans'
  const catalog=await response.json();
  assert.deepEqual(catalog.plans.map(plan=>plan.code),['starter','ultimate','customized']);
  assert.ok(catalog.plans.every(plan=>plan.is_purchasable));
+});
+
+test('signup requires explicit acceptance of all legal documents before database writes',async t=>{
+ const originalGetConnection=db.getConnection;
+ let connectionRequested=false;
+ db.getConnection=async()=>{connectionRequested=true;throw Error('Database should not be reached');};
+ t.after(()=>{db.getConnection=originalGetConnection;});
+ const url=await listen(t);
+ const response=await fetch(`${url}/register`,{
+  method:'POST',
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({
+   organization_name:'Clinique Test',
+   organization_email:'contact@example.com',
+   owner_full_name:'Propriétaire Test',
+   owner_email:'owner@example.com',
+   password:'a-very-long-test-password',
+   plan_id:'2',
+   billing_interval:'annual',
+   accept_terms:true,
+  }),
+ });
+ assert.equal(response.status,400);
+ assert.match((await response.json()).error,/acceptation des conditions/);
+ assert.equal(connectionRequested,false);
+});
+
+test('signup rejects acceptance of an outdated legal-document version',async t=>{
+ const originalGetConnection=db.getConnection;
+ const current=normalizeLegalSettings(null);
+ const edited=normalizeLegalSettings({...current,documents:current.documents.map((document,index)=>index?document:{...document,content:`${document.content}\n\n# Mise à jour`} )});
+ let rolledBack=false,released=false,writes=0;
+ db.getConnection=async()=>({
+  beginTransaction:async()=>{},
+  rollback:async()=>{rolledBack=true;},
+  release:()=>{released=true;},
+  execute:async sql=>{
+   if(sql.includes('FROM platform_settings'))return [[{setting_value:JSON.stringify(edited)}],[]];
+   writes+=1;
+   throw Error(`Unexpected SQL after stale consent: ${sql}`);
+  },
+ });
+ t.after(()=>{db.getConnection=originalGetConnection;});
+ const registration={
+  organization_name:'Clinique Test',
+  organization_email:'contact@example.com',
+  owner_full_name:'Propriétaire Test',
+  owner_email:'owner@example.com',
+  password:'a-very-long-test-password',
+  plan_id:'2',
+  billing_interval:'annual',
+  accept_terms:true,
+  accept_legal_documents:true,
+  legal_document_versions:Object.fromEntries(current.documents.map(document=>[document.id,document.version])),
+ };
+ const url=await listen(t);
+ const response=await fetch(`${url}/register`,{
+  method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(registration),
+ });
+ assert.equal(response.status,409);
+ assert.match((await response.json()).error,/documents légaux ont été mis à jour/);
+ assert.equal(rolledBack,true);
+ assert.equal(released,true);
+ assert.equal(writes,0);
 });
 
 test('signup creates the organization, owner and trial subscription in one transaction',async t=>{
@@ -147,6 +235,8 @@ test('signup creates the organization, owner and trial subscription in one trans
    promotion_id:'3',
    partner_code:'PARTNER22',
    accept_terms:true,
+   accept_legal_documents:true,
+   legal_document_versions:Object.fromEntries(normalizeLegalSettings(null).documents.map(document=>[document.id,document.version])),
   };
  const postRegistration=()=>fetch(`${url}/register`,{
   method:'POST',
@@ -178,4 +268,5 @@ test('signup creates the organization, owner and trial subscription in one trans
  assert.deepEqual(subscription.values,[42,2,'2',3,'annual',139500,4,'["stock","procurement","sales","cash"]']);
  const audit=statements.find(item=>item.values?.includes('TENANT_SIGNUP_COMPLETED'));
  assert.match(audit.values[5],/"trial_days":7/);
+ assert.match(audit.values[5],/"legal_documents":\{"versions":\{"conditions-generales":"[a-f0-9]{64}","politique-confidentialite":"[a-f0-9]{64}","accord-traitement-donnees":"[a-f0-9]{64}"\},"accepted_at":".+"\}/);
 });

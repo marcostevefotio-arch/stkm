@@ -40,6 +40,7 @@
                 </section>
                 <p id="signupError" class="signup-error" role="alert" aria-live="polite"></p>
                 <label class="signup-consent"><input type="checkbox" name="accept_terms" required><span>Je confirme être autorisé à créer cet espace et avoir vérifié les informations fournies. L’essai gratuit de 7 jours, avec accès à toutes les fonctionnalités, commence après la création.</span></label>
+                <label class="signup-consent signup-legal-consent"><input id="acceptLegalDocuments" type="checkbox" name="accept_legal_documents" required><span>J’ai lu et j’accepte les <a href="/conditions-generales" data-legal-link="conditions-generales" target="_blank" rel="noopener">Conditions générales</a>, la <a href="/politique-confidentialite" data-legal-link="politique-confidentialite" target="_blank" rel="noopener">Politique de Confidentialité</a> et l’<a href="/accord-traitement-donnees" data-legal-link="accord-traitement-donnees" target="_blank" rel="noopener">Accord sur le Traitement des Données</a>. Consultez chaque document avant de confirmer.</span></label>
                 <button id="signupSubmit" class="portal-button signup-submit" type="submit">Créer mon espace gratuitement <span>→</span></button>
                 <p class="signup-privacy">Aucun paiement n’est demandé à cette étape. La facturation après l’essai est gérée manuellement par l’équipe REDAMS.</p>
             </form>
@@ -49,9 +50,10 @@
             </aside>
         </div>
     </main>
-    <footer class="portal-footer signup-footer"><a class="portal-brand" href="/"><span>R</span><strong>REDAMS<small>STK · GESTION SANTÉ</small></strong></a><small>© <span id="currentYear"></span> REDAMS-STK</small></footer>
+    <footer class="portal-footer signup-footer"><a class="portal-brand" href="/"><span>R</span><strong>REDAMS<small>STK · GESTION SANTÉ</small></strong></a><nav class="signup-legal-links" data-public-legal-links aria-label="Documents légaux" hidden><a href="/conditions-generales" data-legal-link="conditions-generales">Conditions générales</a><a href="/politique-confidentialite" data-legal-link="politique-confidentialite">Politique de Confidentialité</a><a href="/accord-traitement-donnees" data-legal-link="accord-traitement-donnees">Accord sur le Traitement des Données</a></nav><small>© <span id="currentYear"></span> REDAMS-STK</small></footer>
     <script src="/js/password-toggle.js" defer></script>
     <script src="/js/required-marks.js" defer></script>
+    <script src="/js/legal-documents.js" defer></script>
     <script src="/js/signup.js" defer></script>
 </body>
 </html>

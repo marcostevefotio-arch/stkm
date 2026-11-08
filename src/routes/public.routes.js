@@ -4,6 +4,7 @@ const bcrypt=require('bcryptjs');
 const jwt=require('jsonwebtoken');
 const {randomBytes}=require('crypto');
 const {MODULES,MODULE_KEYS,getPlanModules,getTermPrice,parseJson}=require('../config/pricing');
+const {DOCUMENTS:LEGAL_DOCUMENTS,loadLegalSettings}=require('../config/legal-documents');
 
 const TRIAL_DAYS=7;
 const validId=value=>/^[1-9]\d{0,19}$/.test(String(value||''));
@@ -18,6 +19,14 @@ function createSlug(value){
   .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,75)||'entreprise';
  return `${base}-${randomBytes(5).toString('hex')}`;
 }
+
+router.get('/legal-documents',async(req,res,next)=>{
+ try{
+  const settings=await loadLegalSettings(db);
+  res.set('Cache-Control','no-store');
+  res.json(settings);
+ }catch(error){next(error);}
+});
 
 router.get('/catalog',async(req,res,next)=>{
  try{
@@ -74,6 +83,7 @@ router.post('/register',async(req,res,next)=>{
  const partnerCode=typeof body.partner_code==='string'?body.partner_code.trim().toUpperCase():'';
  const interval=String(body.billing_interval||'monthly');
  const selectedModules=body.selected_modules;
+ const legalVersions=body.legal_document_versions;
  const userLimit=body.user_limit===undefined||body.user_limit===''?null:Number(body.user_limit);
  if(organizationName.length<2||organizationName.length>180||!validEmail(organizationEmail)||
     ownerName.length<2||ownerName.length>180||!validEmail(ownerEmail)||
@@ -83,12 +93,20 @@ router.post('/register',async(req,res,next)=>{
     !['monthly','annual','biennial'].includes(interval)||
     (userLimit!==null&&(!Number.isInteger(userLimit)||userLimit<1||userLimit>100000))||
     (selectedModules!==undefined&&(!Array.isArray(selectedModules)||selectedModules.some(module=>!MODULE_KEYS.includes(module))||new Set(selectedModules).size!==selectedModules.length))||
-    body.accept_terms!==true){
+    body.accept_terms!==true||body.accept_legal_documents!==true||
+    !legalVersions||typeof legalVersions!=='object'||Array.isArray(legalVersions)||
+    Object.keys(legalVersions).length!==LEGAL_DOCUMENTS.length||
+    LEGAL_DOCUMENTS.some(document=>typeof legalVersions[document.id]!=='string'||!/^[a-f0-9]{64}$/.test(legalVersions[document.id]))){
   return res.status(400).json({error:'Vérifiez les informations de l’entreprise, du propriétaire, le forfait, le mot de passe (12 caractères minimum) et l’acceptation des conditions.'});
  }
  let connection;
  try{
   connection=await db.getConnection();await connection.beginTransaction();
+  const legalSettings=await loadLegalSettings(connection);
+  if(LEGAL_DOCUMENTS.some(document=>legalVersions[document.id]!==legalSettings.documents.find(item=>item.id===document.id)?.version)){
+   await connection.rollback();connection.release();connection=null;
+   return res.status(409).json({error:'Les documents légaux ont été mis à jour. Actualisez cette page, consultez-les puis confirmez à nouveau votre acceptation.'});
+  }
   await connection.execute('INSERT INTO account_email_claims(email,user_id) VALUES(?,NULL)',[ownerEmail]);
   const [existingUsers]=await connection.execute('SELECT id FROM users WHERE email=? LIMIT 1 FOR UPDATE',[ownerEmail]);
   if(existingUsers.length){
@@ -163,7 +181,7 @@ router.post('/register',async(req,res,next)=>{
   );
   await connection.execute(
    'INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,details_json) VALUES(?,?,?,?,?,?)',
-   [organizationId,user.insertId,'TENANT_SIGNUP_COMPLETED','subscription',String(planId),JSON.stringify({plan_id:planId,promotion_id:validPromotionId,trial_days:TRIAL_DAYS,billing_interval:interval,contract_amount:contractAmount,max_users:maxUsers,selected_modules:modules})]
+   [organizationId,user.insertId,'TENANT_SIGNUP_COMPLETED','subscription',String(planId),JSON.stringify({plan_id:planId,promotion_id:validPromotionId,trial_days:TRIAL_DAYS,billing_interval:interval,contract_amount:contractAmount,max_users:maxUsers,selected_modules:modules,legal_documents:{versions:legalVersions,accepted_at:new Date().toISOString()}})]
   );
   const [users]=await connection.execute(
    `SELECT u.id,u.organization_id,u.full_name,u.email,u.role,o.name organization_name,o.status organization_status,u.password_version

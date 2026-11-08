@@ -296,6 +296,7 @@
                 ['pricing', 'Tarifs et promotions'],
                 ['partners', 'Partenaires'],
                 ['settings', 'Paramètres'],
+                ['legal', 'Documents légaux'],
                 ['report', 'Rapport marketing'],
                 ['faqs', 'FAQ'],
                 ['trainings', 'Formations'],
@@ -487,6 +488,35 @@
                         const promo = promotions.items.find(item => String(item.id) === button.dataset.promoToggle);
                         run(button, async () => { await send('PATCH', `/admin/promotions/${promo.id}`, { name: promo.name, plan_id: promo.plan_id || null, discount_type: promo.discount_type, discount_value: Number(promo.discount_value), starts_at: promo.starts_at, ends_at: promo.ends_at || null, new_users_only: Boolean(promo.new_users_only), is_active: button.dataset.active !== '1' }); toast('Promotion mise à jour.'); await load('pricing'); });
                     });
+                } else if (key === 'legal') {
+                    const settings = await api('/admin/legal-documents');
+                    panel.innerHTML = `<form data-legal-form>
+                        <div class="sp-panel"><h3>Affichage des documents</h3>
+                            <label><input type="checkbox" name="show_public_links"${settings.show_public_links ? ' checked' : ''}> Afficher les liens sur les pages publiques</label>
+                            <label><input type="checkbox" name="show_authenticated_links"${settings.show_authenticated_links ? ' checked' : ''}> Afficher un accès aux documents dans les paramètres après connexion</label>
+                            <p class="sp-muted">Le consentement aux documents lors de l’inscription reste obligatoire. La désactivation masque les liens de navigation publics et/ou l’onglet dans l’espace abonné; les pages directes restent accessibles.</p>
+                        </div>
+                        ${settings.documents.map(document => `<div class="sp-panel"><h3>${esc(document.title)}</h3><p class="sp-muted">Version ${esc(document.version.slice(0, 12))} · Utilisez « # » en début de ligne pour créer un titre de section. Le contenu est du texte brut, jamais du HTML.</p><label>Titre<input name="title_${esc(document.id)}" maxlength="180" minlength="2" value="${esc(document.title)}" required></label><label>Contenu<textarea name="content_${esc(document.id)}" maxlength="60000" minlength="20" rows="16" required>${esc(document.content)}</textarea></label></div>`).join('')}
+                        <p class="sp-error" role="alert"></p><button class="sp-btn">Enregistrer les documents et options</button>
+                    </form>`;
+                    const form=panel.querySelector('[data-legal-form]');
+                    form.onsubmit=event=>{
+                        event.preventDefault();
+                        const body={
+                            show_public_links:form.elements.show_public_links.checked,
+                            show_authenticated_links:form.elements.show_authenticated_links.checked,
+                            documents:settings.documents.map(document=>({
+                                id:document.id,
+                                title:form.elements[`title_${document.id}`].value,
+                                content:form.elements[`content_${document.id}`].value
+                            }))
+                        };
+                        run(form.querySelector('button'),async()=>{
+                            await send('PUT','/admin/legal-documents',body);
+                            toast('Documents et options d’affichage enregistrés.');
+                            await load('legal');
+                        },form.querySelector('.sp-error'));
+                    };
                 } else if (key === 'database') {
                     const data = await api('/admin/database/status');
                     const statusText = { applied: 'Appliquée', pending: 'À appliquer', blocked: 'Bloquée', checksum_mismatch: 'Signature différente', schema_drift: 'Schéma divergent' };

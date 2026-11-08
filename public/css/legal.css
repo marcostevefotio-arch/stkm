@@ -1,0 +1,21 @@
+.legal-body{min-height:100vh;background:#f7faf8;color:#24342d}
+.legal-header{position:relative}
+.legal-shell{width:min(900px,calc(100% - 40px));margin:0 auto;padding:48px 0 72px}
+.legal-heading{margin-bottom:24px}
+.legal-heading .back-link{display:inline-block;margin-bottom:18px;color:#66776f;font-size:12px;font-weight:700}
+.legal-heading h1{margin:8px 0 10px;font:800 clamp(30px,4vw,42px)/1.15 Montserrat,Poppins,sans-serif;letter-spacing:-1.3px}
+.legal-heading p{margin:0;color:#66776f;font-size:13px;line-height:1.7}
+.legal-draft-notice{margin:0 0 20px;padding:14px 16px;border:1px solid #e8c887;border-radius:9px;background:#fff8e9;color:#654c20;font-size:12px;line-height:1.65}
+.legal-document{padding:clamp(20px,4vw,38px);border:1px solid var(--line);border-radius:12px;background:#fff}
+.legal-document h2{margin:28px 0 10px;font:700 17px/1.35 Montserrat,Poppins,sans-serif}
+.legal-document h2:first-child{margin-top:0}
+.legal-document p,.legal-document li{color:#52625b;font-size:13px;line-height:1.8}
+.legal-document ul{padding-left:22px}
+.legal-document li+li{margin-top:5px}
+.legal-placeholder{padding:1px 5px;border-radius:4px;background:#fff0c7;color:#654c20;font-weight:700}
+.legal-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;max-width:900px;margin:0 auto;padding:22px 0;border-top:1px solid var(--line)}
+.legal-footer small{color:#66776f;font-size:10px}
+.legal-footer a{color:var(--green);font-size:11px;font-weight:700}
+.legal-footer nav{display:flex;flex-wrap:wrap;gap:8px 14px}
+.legal-footer nav[hidden]{display:none}
+@media(max-width:540px){.legal-shell{width:calc(100% - 24px);padding:30px 0 45px}.legal-header{height:66px;padding:0 12px}.legal-document{padding:20px 16px}.legal-footer{margin:0 12px;align-items:flex-start;flex-direction:column}}
