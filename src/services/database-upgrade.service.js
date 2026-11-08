@@ -256,6 +256,24 @@ const migrations = [{
             await connection.execute(`ALTER TABLE \`${step.table}\` ADD COLUMN \`${step.column}\` TINYINT(1) NOT NULL DEFAULT 0`);
         }
     }
+},{
+    id: '2026110702_merge_pharmacist_storekeeper',
+    description: 'Fusion réversible des droits pharmacien et gestionnaire de stock, désactivée par défaut.',
+    definition: 'Add organization_settings.merge_pharmacist_storekeeper TINYINT(1) NOT NULL DEFAULT 0; preserve users.role.',
+    async inspect(connection) {
+        const [tables] = await connection.execute("SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='organization_settings'");
+        if (!tables.length || String(tables[0].ENGINE).toLowerCase() !== 'innodb') return { ready: false, reason: 'La table des paramètres doit exister avec le moteur InnoDB.', steps: [] };
+        const [columns] = await connection.execute("SELECT COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='organization_settings' AND COLUMN_NAME='merge_pharmacist_storekeeper'");
+        const column = columns[0];
+        if (column && (String(column.COLUMN_TYPE).toLowerCase() !== 'tinyint(1)' || column.IS_NULLABLE !== 'NO' || String(column.COLUMN_DEFAULT) !== '0')) return { ready: false, reason: 'La colonne de fusion des rôles est incompatible.', steps: [] };
+        return { ready: true, reason: null, steps: column ? [] : [{ action: 'add_column', table: 'organization_settings', column: 'merge_pharmacist_storekeeper', description: 'Ajouter la fusion des rôles, désactivée par défaut.' }] };
+    },
+    async apply(connection, steps) {
+        for (const step of steps) {
+            if (step.action !== 'add_column' || step.table !== 'organization_settings' || step.column !== 'merge_pharmacist_storekeeper') throw new Error('Étape de fusion des rôles invalide.');
+            await connection.execute('ALTER TABLE `organization_settings` ADD COLUMN `merge_pharmacist_storekeeper` TINYINT(1) NOT NULL DEFAULT 0');
+        }
+    }
 }].map(migration => ({
     ...migration,
     checksum: crypto.createHash('sha256')

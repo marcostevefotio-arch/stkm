@@ -11,7 +11,9 @@ test('separated sale and payment work on isolated MySQL temporary tables',{skip:
  t.after(()=>c.end());
  const statements=[
   'CREATE TEMPORARY TABLE organizations (id BIGINT UNSIGNED PRIMARY KEY) ENGINE=InnoDB',
-  'CREATE TEMPORARY TABLE organization_settings (organization_id BIGINT UNSIGNED PRIMARY KEY, sales_tax_rate DECIMAL(5,2), separate_sale_payment BOOLEAN NOT NULL DEFAULT 0) ENGINE=InnoDB',
+  "CREATE TEMPORARY TABLE organization_settings (organization_id BIGINT UNSIGNED PRIMARY KEY, sales_tax_rate DECIMAL(5,2), separate_sale_payment BOOLEAN NOT NULL DEFAULT 0,merge_pharmacist_storekeeper BOOLEAN NOT NULL DEFAULT 0,currency CHAR(3) DEFAULT 'XAF') ENGINE=InnoDB",
+  'CREATE TEMPORARY TABLE users (id BIGINT UNSIGNED PRIMARY KEY,organization_id BIGINT UNSIGNED,role VARCHAR(30),is_active BOOLEAN) ENGINE=InnoDB',
+  'CREATE TEMPORARY TABLE notifications (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,organization_id BIGINT UNSIGNED,title VARCHAR(180),message TEXT,audience VARCHAR(30),recipient_user_id BIGINT UNSIGNED,created_by BIGINT UNSIGNED) ENGINE=InnoDB',
   'CREATE TEMPORARY TABLE products (id BIGINT UNSIGNED PRIMARY KEY, organization_id BIGINT UNSIGNED, sku VARCHAR(80), name VARCHAR(190), unit VARCHAR(40), quantity_on_hand DECIMAL(14,3), sale_price DECIMAL(14,2), purchase_cost DECIMAL(18,4), prescription_required BOOLEAN, max_customer_quantity DECIMAL(14,3), minimum_purchase_interval_hours INT, is_active BOOLEAN) ENGINE=InnoDB',
   "CREATE TEMPORARY TABLE sales_invoices (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,organization_id BIGINT UNSIGNED,invoice_number VARCHAR(50),patient_id BIGINT UNSIGNED,patient_name VARCHAR(190),subtotal DECIMAL(14,2),tax_rate DECIMAL(5,2),tax_amount DECIMAL(14,2),total_amount DECIMAL(14,2),status VARCHAR(40) DEFAULT 'issued',review_flags JSON,notes TEXT,created_by BIGINT UNSIGNED,separate_cashier BOOLEAN NOT NULL DEFAULT 0) ENGINE=InnoDB",
   'CREATE TEMPORARY TABLE sales_invoice_items (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,invoice_id BIGINT UNSIGNED,product_id BIGINT UNSIGNED,sku VARCHAR(80),product_name VARCHAR(190),unit VARCHAR(40),quantity DECIMAL(14,3),unit_price DECIMAL(14,2),line_subtotal DECIMAL(14,2),line_tax DECIMAL(14,2),line_total DECIMAL(14,2),prescription_required BOOLEAN,prescription_provided BOOLEAN,unit_purchase_cost DECIMAL(18,4)) ENGINE=InnoDB',
@@ -25,13 +27,17 @@ test('separated sale and payment work on isolated MySQL temporary tables',{skip:
  ];
  for(const sql of statements)await c.query(sql);
  await c.execute('INSERT INTO organizations VALUES (42)');
- await c.execute('INSERT INTO organization_settings VALUES (42,0,1)');
+ await c.execute('INSERT INTO organization_settings(organization_id,sales_tax_rate,separate_sale_payment) VALUES (42,0,1)');
+ await c.execute("INSERT INTO users VALUES(7,42,'PHARMACIST',1),(8,42,'CASHIER',1)");
  await c.execute("INSERT INTO products VALUES (3,42,'S','Produit','u',5,10,3,0,NULL,NULL,1)");
- const original=db.getConnection;
- db.getConnection=async()=>({beginTransaction:()=>c.beginTransaction(),commit:()=>c.commit(),rollback:()=>c.rollback(),release:()=>{},execute:(...args)=>c.execute(...args)});
+ const original=db.getConnection;let failNotifications=false;
+ db.getConnection=async()=>({beginTransaction:()=>c.beginTransaction(),commit:()=>c.commit(),rollback:()=>c.rollback(),release:()=>{},execute:(...args)=>{
+  if(failNotifications&&args[0].startsWith('INSERT INTO notifications'))throw Error('Notification write failed');
+  return c.execute(...args);
+ }});
  t.after(()=>{db.getConnection=original;});
- let user=7,role='PHARMACIST';
- const app=express();app.use(express.json());app.use((req,res,next)=>{req.tenantId=42;req.user={id:user,role};next();});
+ let user=7,role='PHARMACIST',merged=0;
+ const app=express();app.use(express.json());app.use((req,res,next)=>{req.tenantId=42;req.user={id:user,role,merge_pharmacist_storekeeper:merged};next();});
  app.use('/sales',sales);app.use((error,req,res,next)=>res.status(500).json({error:error.message}));
  const server=app.listen(0);await new Promise(resolve=>server.once('listening',resolve));
  t.after(()=>new Promise(resolve=>server.close(resolve)));
@@ -40,6 +46,9 @@ test('separated sale and payment work on isolated MySQL temporary tables',{skip:
  let response=await post('',{items:[{product_id:3,quantity:1}],payments:[]});
  assert.equal(response.status,201,await response.clone().text());
  const invoice=await response.json();assert.equal(invoice.status,'issued');
+ const [notifications]=await c.execute('SELECT title,recipient_user_id FROM notifications');
+ assert.equal(notifications.length,1);assert.equal(notifications[0].recipient_user_id,8);
+ assert.ok(notifications[0].title.includes(invoice.invoice_number));
  let [rows]=await c.execute('SELECT quantity_on_hand FROM products WHERE id=3');assert.equal(rows[0].quantity_on_hand,'4.000');
  await c.execute('UPDATE organization_settings SET separate_sale_payment=0 WHERE organization_id=42');
  await c.execute("INSERT INTO cash_sessions VALUES(4,42,'open',0,NOW())");
@@ -54,4 +63,22 @@ test('separated sale and payment work on isolated MySQL temporary tables',{skip:
  [rows]=await c.execute('SELECT recorded_by,amount FROM sales_payments ORDER BY id');
  assert.deepEqual(rows.map(row=>[row.recorded_by,row.amount]),[[8,'4.00'],[8,'6.00']]);
  [rows]=await c.execute('SELECT COUNT(*) count FROM audit_logs');assert.equal(Number(rows[0].count),3);
+ await c.execute('UPDATE organization_settings SET merge_pharmacist_storekeeper=1,separate_sale_payment=1 WHERE organization_id=42');
+ user=7;role='STOREKEEPER';merged=1;
+ response=await post('',{items:[{product_id:3,quantity:1}],payments:[]});
+ assert.equal(response.status,201,await response.clone().text());
+ const mergedInvoice=await response.json();
+ await c.execute('UPDATE organization_settings SET separate_sale_payment=0 WHERE organization_id=42');
+ response=await post(`/${mergedInvoice.id}/payments`,{payments:[{method:'cash',amount:10,cash_received:10}]});
+ assert.equal(response.status,403);
+ await c.execute('UPDATE organization_settings SET separate_sale_payment=1 WHERE organization_id=42');
+ const [[stockBefore]]=await c.execute('SELECT quantity_on_hand FROM products WHERE id=3');
+ const [[invoicesBefore]]=await c.execute('SELECT COUNT(*) count FROM sales_invoices');
+ failNotifications=true;
+ response=await post('',{items:[{product_id:3,quantity:1}],payments:[]});
+ assert.equal(response.status,500);
+ const [[stockAfter]]=await c.execute('SELECT quantity_on_hand FROM products WHERE id=3');
+ const [[invoicesAfter]]=await c.execute('SELECT COUNT(*) count FROM sales_invoices');
+ assert.equal(stockAfter.quantity_on_hand,stockBefore.quantity_on_hand);
+ assert.equal(invoicesAfter.count,invoicesBefore.count);
 });

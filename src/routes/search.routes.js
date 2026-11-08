@@ -1,6 +1,6 @@
 const r=require('express').Router(),db=require('../config/database');
 const {MODULE_KEYS,parseJson}=require('../config/pricing');
-const {canAccessModule}=require('../../public/js/access-policy');
+const {canAccessModule,hasRole}=require('../../public/js/access-policy');
 
 r.get('/',async(req,res,next)=>{
  try{
@@ -61,7 +61,7 @@ r.get('/',async(req,res,next)=>{
     [req.tenantId,term,term,term,term,term,term]
    );
   }
-  if(hasFeature('patients')&&(!req.user||['OWNER','ADMIN','PHARMACIST'].includes(req.user.role))){
+  if(hasFeature('patients')&&(!req.user||hasRole(req.user,'OWNER','ADMIN','PHARMACIST'))){
    [patients]=await db.execute(
     `SELECT id,patient_code,full_name,birth_date,gender,phone,email
      FROM patients WHERE organization_id=? AND is_active=1

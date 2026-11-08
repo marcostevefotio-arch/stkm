@@ -1,5 +1,5 @@
 const router=require('express').Router(),db=require('../config/database'),{parseJson}=require('../config/pricing');
-const {canAccessModule,canCollect}=require('../../public/js/access-policy');
+const {canAccessModule,canCollect,hasRole}=require('../../public/js/access-policy');
 
 const has=(req,feature)=>{
  if(req.user?.role==='SUPER_ADMIN')return true;
@@ -15,11 +15,11 @@ router.get('/',async(req,res,next)=>{
   const role=req.user.role,tenant=req.tenantId,alerts=[];
   const canStock=has(req,'stock')&&canAccessModule(req.user,'stock');
   let canCash=has(req,'cash')&&canAccessModule(req.user,'cash');
-  if(canCash&&role==='PHARMACIST'){
+  if(canCash&&hasRole(req.user,'PHARMACIST')){
    const [settings]=await db.execute('SELECT separate_sale_payment FROM organization_settings WHERE organization_id=?',[tenant]);
    canCash=canCollect(req.user,settings[0]);
   }
-  const canPatients=has(req,'patients')&&['OWNER','ADMIN','PHARMACIST','SUPER_ADMIN'].includes(role);
+  const canPatients=has(req,'patients')&&hasRole(req.user,'OWNER','ADMIN','PHARMACIST','SUPER_ADMIN');
 
   if(canStock){
    const [rows]=await db.execute('SELECT name,quantity_on_hand,reorder_level,unit FROM products WHERE organization_id=? AND is_active=1 AND quantity_on_hand<=reorder_level ORDER BY quantity_on_hand,name LIMIT 200',[tenant]);

@@ -23,6 +23,7 @@ const columnMigrations=[
  ['platform_promotions','plan_id','BIGINT UNSIGNED NULL'],
  ['organization_settings','sales_tax_rate','DECIMAL(5,2) NOT NULL DEFAULT 0'],
  ['organization_settings','separate_sale_payment','TINYINT(1) NOT NULL DEFAULT 0'],
+ ['organization_settings','merge_pharmacist_storekeeper','TINYINT(1) NOT NULL DEFAULT 0'],
  ['sales_invoices','separate_cashier','TINYINT(1) NOT NULL DEFAULT 0'],
  ['organization_settings','patient_code_mode',"ENUM('auto','manual') NOT NULL DEFAULT 'manual'"],
  ['organization_settings','patient_code_format',"VARCHAR(60) NOT NULL DEFAULT 'PAT-{SEQ:5}'"],
@@ -89,6 +90,8 @@ async function ensureForeignKey(table,column,referencedTable,referencedColumn,co
  await recordBuiltInMigration(db,'2026110603_sale_unit_purchase_cost');
  await verifyBuiltInMigrationSchema(db,'2026110701_separate_sale_payment');
  await recordBuiltInMigration(db,'2026110701_separate_sale_payment');
+ await verifyBuiltInMigrationSchema(db,'2026110702_merge_pharmacist_storekeeper');
+ await recordBuiltInMigration(db,'2026110702_merge_pharmacist_storekeeper');
  await db.execute(
   `INSERT IGNORE INTO account_email_claims(email,user_id)
    SELECT LOWER(email),MIN(id) FROM users GROUP BY LOWER(email)`

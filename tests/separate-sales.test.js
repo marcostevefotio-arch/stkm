@@ -22,6 +22,7 @@ test('separated sale persists its policy, deducts stock and never requires a cas
   beginTransaction:async()=>calls.push('begin'),commit:async()=>calls.push('commit'),rollback:async()=>calls.push('rollback'),release:()=>{},
   execute:async(sql,values)=>{
    calls.push({sql,values});
+   if(sql.startsWith('SELECT id,role FROM users'))return [[{id:8,role:'CASHIER'}]];
    if(sql.includes('FROM organization_settings'))return [[{sales_tax_rate:'0',separate_sale_payment:1}]];
    if(sql.includes('FROM products WHERE'))return [[{id:3,sku:'S',name:'Produit',unit:'u',quantity_on_hand:'5',sale_price:'10',purchase_cost:'3',prescription_required:0,max_customer_quantity:null,minimum_purchase_interval_hours:null}]];
    if(sql.startsWith('INSERT INTO sales_invoices'))return [{insertId:15}];

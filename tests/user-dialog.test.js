@@ -24,6 +24,7 @@ for(const editing of [false,true])test(`${editing?'editing':'creating'} a user r
  const context={
   state:{role:'OWNER',userId:1},
   adminRoleLabels:{OWNER:'Owner',ADMIN:'Admin',CASHIER:'Cashier'},
+  displayRole:role=>({OWNER:'Owner',ADMIN:'Admin',CASHIER:'Cashier'}[role]),
   esc:String,
   document:{createElement:()=>modal,body:{append:()=>{}}},
   api:async(url,options)=>{requests.push({url,...options});return {message:'Saved'};},

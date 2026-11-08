@@ -7,6 +7,7 @@ const {hasFeature,requireFeature}=require('../middleware/plan-access');
 const requireFeatureCash=requireFeature('cash');
 const {canSell,canCollect}=require('../../public/js/access-policy');
 const {assertCashAccess,requireCashAccess}=require('../middleware/sale-workflow');
+const {notifyCashiers}=require('../services/sale-notification.service');
 const allowSales=requireRole('OWNER','ADMIN','PHARMACIST','CASHIER');
 const viewPrescription=requireRole('OWNER','ADMIN','PHARMACIST');
 const paymentMethods=new Set(['cash','mobile_money','bank_transfer','insurance','other']);
@@ -149,7 +150,8 @@ async function createSale(req,res,next){
  try{
   connection=await db.getConnection();await connection.beginTransaction();
   await connection.execute('SELECT id FROM organizations WHERE id=? FOR UPDATE',[req.tenantId]);
-  const [settings]=await connection.execute('SELECT sales_tax_rate,separate_sale_payment FROM organization_settings WHERE organization_id=? FOR UPDATE',[req.tenantId]);
+  const [settings]=await connection.execute('SELECT sales_tax_rate,separate_sale_payment,merge_pharmacist_storekeeper,currency FROM organization_settings WHERE organization_id=? FOR UPDATE',[req.tenantId]);
+  if(settings[0]?.merge_pharmacist_storekeeper!==undefined)req.user.merge_pharmacist_storekeeper=settings[0].merge_pharmacist_storekeeper;
   const separate=Boolean(settings[0]?.separate_sale_payment);
   if(!canSell(req.user,settings[0]))throw Object.assign(Error('Saisie de vente refusée : en mode deux temps, seul le pharmacien ou un administrateur saisit la vente. En mode un temps, les modules Ventes et Caisse sont requis.'),{status:403});
   if(separate&&body.payments?.length)throw Object.assign(Error('Cette vente doit être encaissée séparément par un autre utilisateur en caisse.'),{status:409});
@@ -232,6 +234,7 @@ async function createSale(req,res,next){
   const status=body.payments?.length?await refreshInvoiceStatus(connection,invoiceId):'issued';
   await connection.execute('INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,details_json) VALUES(?,?,?,?,?,?)',
    [req.tenantId,req.user.id,'SALE_CREATED','sales_invoice',String(invoiceId),JSON.stringify({invoiceNumber,totalAmount,reviewFlags:flags,separateCashier:separate})]);
+  await notifyCashiers(connection,{tenantId:req.tenantId,user:req.user,settings:settings[0]||{},invoiceNumber,totalAmount,status,separate});
   await connection.commit();connection.release();connection=null;
   res.status(201).json({id:invoiceId,invoice_number:invoiceNumber,subtotal,tax_rate:taxRate,tax_amount:taxAmount,total_amount:totalAmount,status,separate_cashier:separate,review_flags:flags,message:separate?'Vente enregistrée, en attente d’encaissement par un autre utilisateur.':'Vente enregistrée et reçu généré.'});
  }catch(error){if(connection){await connection.rollback();connection.release();}if(error.status)return res.status(error.status).json({error:error.message});next(error);}
@@ -311,6 +314,15 @@ router.get('/pending',requireFeatureCash,requireCashAccess,async(req,res,next)=>
  }catch(error){next(error);}
 });
 router.post('/',createSale);
+router.get('/by-number/:number',requireFeatureCash,requireCashAccess,async(req,res,next)=>{
+ const number=String(req.params.number).trim();
+ if(!/^FAC-\d{8}-\d{6,20}$/.test(number))return res.status(400).json({error:'Numéro de facture invalide.'});
+ try{
+  const [rows]=await db.execute('SELECT id FROM sales_invoices WHERE organization_id=? AND invoice_number=? LIMIT 1',[req.tenantId,number]);
+  if(!rows.length)return res.status(404).json({error:'Facture introuvable dans cet établissement.'});
+  res.json(rows[0]);
+ }catch(error){next(error);}
+});
 router.get('/:id',async(req,res,next)=>{
  try{
   const [invoices]=await db.execute(

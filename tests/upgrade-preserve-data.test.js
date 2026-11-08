@@ -90,8 +90,11 @@ test('SQL upgrade preserves rows, reruns safely and blocks incompatible producti
  assert.equal(product.purchase_cost,null);
  const [[invoice]]=await connection.query('SELECT separate_cashier FROM sales_invoices WHERE id=15');
  assert.equal(invoice.separate_cashier,0);
+ const [[setting]]=await connection.query('SELECT merge_pharmacist_storekeeper FROM organization_settings WHERE organization_id=42');
+ assert.equal(setting.merge_pharmacist_storekeeper,0);
  await connection.query("UPDATE products SET purchase_cost=7.1250 WHERE id=3");
  await connection.query('UPDATE organization_settings SET separate_sale_payment=1 WHERE organization_id=42');
+ await connection.query('UPDATE organization_settings SET merge_pharmacist_storekeeper=1 WHERE organization_id=42');
  await connection.query('UPDATE sales_invoices SET separate_cashier=1 WHERE id=15');
  await connection.query("INSERT INTO accounting_books(organization_id,opening_date,accounts,created_by) VALUES(42,'2026-01-01',JSON_ARRAY(),7)");
  await connection.query("INSERT INTO accounting_entries(organization_id,entry_date,kind,status,description,`lines`,created_by) VALUES(42,'2026-01-01','normal','draft','Existing entry',JSON_ARRAY(),7)");

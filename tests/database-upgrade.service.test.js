@@ -10,6 +10,7 @@ function fakeConnection({ history = [], events = [] } = {}) {
             if (sql.includes('GET_LOCK')) return [[{ acquired: 1 }], []];
             if (sql.includes("TABLE_NAME IN ('accounting_books','users','accounting_review_snapshots')")) return [[{ TABLE_NAME: 'users', ENGINE: 'InnoDB' }, { TABLE_NAME: 'accounting_books', ENGINE: 'InnoDB' }], []];
             if (sql.includes("TABLE_NAME IN ('organization_settings','sales_invoices')")) return [[{ TABLE_NAME: 'organization_settings', ENGINE: 'InnoDB' }, { TABLE_NAME: 'sales_invoices', ENGINE: 'InnoDB' }], []];
+            if (sql.includes("TABLE_NAME='organization_settings'") && sql.includes('SELECT TABLE_NAME')) return [[{ TABLE_NAME: 'organization_settings', ENGINE: 'InnoDB' }], []];
             if (sql.includes("COLUMN_NAME='separate_sale_payment'")) return [[], []];
             if (sql.includes('SELECT TABLE_NAME')) return [[{ TABLE_NAME: 'plans' }, { TABLE_NAME: 'platform_promotions' }, { TABLE_NAME: 'products' }, { TABLE_NAME: 'sales_invoice_items' }], []];
             if (sql.includes("TABLE_NAME='users' AND COLUMN_NAME='role'")) return [[{ COLUMN_TYPE: "enum('OWNER','ADMIN','PHARMACIST','STOREKEEPER','CASHIER','VIEWER','SUPER_ADMIN')", IS_NULLABLE: 'NO', COLUMN_DEFAULT: 'VIEWER' }], []];
@@ -28,7 +29,7 @@ function fakeConnection({ history = [], events = [] } = {}) {
 test('database migration status previews additive changes without applying them', async () => {
     const connection = fakeConnection();
     const status = await getStatus(connection);
-    assert.equal(status.items.length, 7);
+    assert.equal(status.items.length, 8);
     assert.equal(status.items[0].status, 'pending');
     assert.deepEqual(status.items[0].steps.map(step => step.action), ['add_column', 'add_foreign_key']);
     assert.equal(connection.events.some(sql => sql.startsWith('ALTER TABLE')), false);
@@ -43,9 +44,25 @@ test('separated sales migration adds default-off fields only after backup', asyn
         connectionPool: { getConnection: async () => connection },
         backup: async () => { connection.events.push('BACKUP_VERIFIED'); return { filename: 'backup.sql', size: 12 }; }
     });
+
     const ddl = connection.events.filter(sql => typeof sql === 'string' && sql.startsWith('ALTER TABLE `'));
     assert.equal(ddl.length, 2);
     assert.ok(ddl.every(sql => /TINYINT\(1\) NOT NULL DEFAULT 0/.test(sql) && connection.events.indexOf(sql) > connection.events.indexOf('BACKUP_VERIFIED')));
+});
+
+test('role merger migration is additive, default-off and requires backup', async () => {
+    const connection = fakeConnection();
+    const migration = (await getStatus(connection)).items.find(item => item.id === '2026110702_merge_pharmacist_storekeeper');
+    assert.equal(migration.status, 'pending');
+    assert.equal(migration.steps.length, 1);
+    await runMigration({ migrationId: migration.id, staffId: 1, reviewed: true,
+        connectionPool: { getConnection: async () => connection },
+        backup: async () => { connection.events.push('BACKUP_VERIFIED'); return { filename: 'backup.sql', size: 12 }; }
+    });
+    const ddl = connection.events.find(sql => sql.startsWith('ALTER TABLE `organization_settings` ADD COLUMN `merge_pharmacist_storekeeper`'));
+    assert.ok(ddl);
+    assert.ok(connection.events.indexOf(ddl) > connection.events.indexOf('BACKUP_VERIFIED'));
+    assert.equal(connection.events.some(sql => /UPDATE users|ALTER TABLE users/.test(sql)), false);
 });
 
 test('review migration requires backup before creating its table', async () => {

@@ -1,4 +1,5 @@
 const jwt=require('jsonwebtoken'),db=require('../config/database');
+const {hasRole}=require('../../public/js/access-policy');
 async function authenticate(req,res,next){
  const h=req.headers.authorization||'', token=h.startsWith('Bearer ')?h.slice(7):null;
  if(!token)return res.status(401).json({error:'Authentification requise.'});
@@ -12,10 +13,11 @@ async function authenticate(req,res,next){
            ,p.plan_type subscription_plan_type,
            CASE WHEN s.status='trialing' AND s.current_period_end>CURDATE() THEN NULL
                 WHEN p.plan_type='customized' THEN s.selected_modules ELSE p.included_modules END subscription_modules,
-           s.max_users subscription_max_users
+           s.max_users subscription_max_users,os.merge_pharmacist_storekeeper
     FROM users u JOIN organizations o ON o.id=u.organization_id
     LEFT JOIN subscriptions s ON s.id=(SELECT MAX(s2.id) FROM subscriptions s2 WHERE s2.organization_id=u.organization_id)
     LEFT JOIN plans p ON p.id=IF(s.status='trialing' AND s.current_period_end>CURDATE(),s.plan_id,COALESCE(s.target_plan_id,s.plan_id))
+    LEFT JOIN organization_settings os ON os.organization_id=u.organization_id
     WHERE u.id=? LIMIT 1`,
    [p.sub]
   );
@@ -32,5 +34,5 @@ async function authenticate(req,res,next){
   next();
  }catch(error){next(error);}
 }
-const requireRole=(...roles)=>(req,res,next)=>roles.includes(req.user?.role)?next():res.status(403).json({error:'Permission insuffisante.'});
+const requireRole=(...roles)=>(req,res,next)=>hasRole(req.user,...roles)?next():res.status(403).json({error:'Permission insuffisante.'});
 module.exports={authenticate,requireRole};

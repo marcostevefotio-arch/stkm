@@ -138,6 +138,10 @@
 .review-flags p{margin:7px 0}
 .review-flags small{color:var(--muted)}
 .receipt-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.receipt-identity{display:flex;align-items:center;gap:16px;margin-bottom:16px;break-inside:avoid}
+.receipt-identity img{width:72px;height:72px;object-fit:contain}
+.receipt-identity h2,.receipt-identity p{margin:4px 0}
+.receipt-barcode{display:block;max-width:100%;height:auto;margin:20px auto 0;break-inside:avoid}
 .return-lines{display:grid;gap:8px;max-height:42vh;overflow:auto}
 .cash-stats{margin-bottom:16px}
 .cash-methods{max-width:520px;margin:12px 0 20px}

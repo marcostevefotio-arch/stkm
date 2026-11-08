@@ -103,7 +103,7 @@ const logoTypes={
 r.get('/',async(req,res,next)=>{
  try{
   const [settings]=await db.execute(
-   `SELECT s.display_name,s.logo_url,s.primary_color,s.secondary_color,s.locale,s.currency,s.timezone,s.date_format,s.sales_tax_rate,s.separate_sale_payment,s.qr_format,s.barcode_format,   s.default_label_format,s.patient_code_mode,s.patient_code_format,
+   `SELECT s.display_name,s.logo_url,s.primary_color,s.secondary_color,s.locale,s.currency,s.timezone,s.date_format,s.sales_tax_rate,s.separate_sale_payment,s.merge_pharmacist_storekeeper,s.qr_format,s.barcode_format,   s.default_label_format,s.patient_code_mode,s.patient_code_format,
     o.name company_name,o.address company_address,o.phone company_phone,o.slogan company_slogan,o.email company_email
     FROM organizations o LEFT JOIN organization_settings s ON s.organization_id=o.id WHERE o.id=?`,
    [req.tenantId]
@@ -126,6 +126,23 @@ r.put('/sale-workflow',async(req,res,next)=>{
   await connection.execute("INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,details_json) VALUES(?,?,'SALE_WORKFLOW_CHANGED','organization',?,?)",[req.tenantId,req.user.id,String(req.tenantId),JSON.stringify({before:previous,after:enabled})]);
   await connection.commit();
   res.json({message:'Circuit de vente enregistré. Les ventes existantes conservent leur règle initiale.',separate_sale_payment:enabled});
+ }catch(error){if(connection)await connection.rollback();next(error);}
+ finally{if(connection)connection.release();}
+});
+
+r.put('/role-merger',async(req,res,next)=>{
+ if(!isAdministrator(req))return res.status(403).json({error:'Seuls les propriétaires et administrateurs peuvent fusionner les rôles.'});
+ const enabled=req.body?.merge_pharmacist_storekeeper;
+ if(typeof enabled!=='boolean')return res.status(400).json({error:'La fusion doit être activée ou désactivée explicitement.'});
+ let connection;
+ try{
+  connection=await db.getConnection();await connection.beginTransaction();
+  await connection.execute('SELECT id FROM organizations WHERE id=? FOR UPDATE',[req.tenantId]);
+  const [rows]=await connection.execute('SELECT merge_pharmacist_storekeeper FROM organization_settings WHERE organization_id=? FOR UPDATE',[req.tenantId]);
+  await connection.execute('INSERT INTO organization_settings(organization_id,merge_pharmacist_storekeeper) VALUES(?,?) ON DUPLICATE KEY UPDATE merge_pharmacist_storekeeper=VALUES(merge_pharmacist_storekeeper)',[req.tenantId,enabled]);
+  await connection.execute("INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,details_json) VALUES(?,?,'ROLE_MERGER_CHANGED','organization',?,?)",[req.tenantId,req.user.id,String(req.tenantId),JSON.stringify({before:Boolean(rows[0]?.merge_pharmacist_storekeeper),after:enabled})]);
+  await connection.commit();
+  res.json({message:'Fusion des rôles enregistrée. Les rôles d’origine sont conservés.',merge_pharmacist_storekeeper:enabled});
  }catch(error){if(connection)await connection.rollback();next(error);}
  finally{if(connection)connection.release();}
 });

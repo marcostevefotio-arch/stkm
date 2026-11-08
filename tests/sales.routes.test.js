@@ -67,6 +67,7 @@ for(const role of ['CASHIER','PHARMACIST'])test(`single-step ${role}: receipt, p
   release:()=>{released=true;},
   execute:async(sql,values)=>{
    queries.push({sql,values});
+   if(sql.startsWith('SELECT id,role FROM users'))return [[{id:8,role:'CASHIER'}],[]];
    if(sql.includes('FROM cash_sessions')&&sql.includes("status='open'"))return [[{id:5,opening_cash:'100.00',opened_at:'2026-01-01 09:00:00'}],[]];
    if(sql.includes('FROM products WHERE organization_id=? AND is_active=1'))return [[{id:3,sku:'SKU-3',name:'Produit test',unit:'boîte',quantity_on_hand:'8.000',sale_price:'10.00',purchase_cost:'3.1234',prescription_required:1,max_customer_quantity:'2.000',minimum_purchase_interval_hours:null}],[]];
    if(sql.includes('SELECT sales_tax_rate'))return [[{sales_tax_rate:'10.00'}],[]];
@@ -163,6 +164,7 @@ test('quantity and short-interval purchase checks are returned as review-only fl
  const connection={
   beginTransaction:async()=>{},commit:async()=>{},rollback:async()=>{},release:()=>{},
   execute:async(sql,values)=>{
+   if(sql.startsWith('SELECT id,role FROM users'))return [[{id:8,role:'CASHIER'}],[]];
    if(sql.includes('FROM cash_sessions')&&sql.includes("status='open'"))return [[{id:5,opening_cash:'0.00'}],[]];
    if(sql.includes('FROM patients WHERE id=?'))return [[{id:8,full_name:'Patient test'}],[]];
    if(sql.includes('FROM products WHERE organization_id=? AND is_active=1'))return [[{id:3,sku:'SKU-3',name:'Produit à surveiller',unit:'boîte',quantity_on_hand:'10.000',sale_price:'1.00',purchase_cost:null,prescription_required:0,max_customer_quantity:'2.000',minimum_purchase_interval_hours:24}],[]];

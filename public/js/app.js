@@ -13,6 +13,12 @@
     }
     const canAccessPage = page => window.RedamsAccess.canAccessPage(state.profile, state.settings, page);
     function refreshAccess() {
+        if (state.profile) {
+            state.profile.merge_pharmacist_storekeeper = state.settings.merge_pharmacist_storekeeper;
+            state.canAccessPatientRecords = window.RedamsAccess.hasRole(state.profile, 'OWNER', 'ADMIN', 'PHARMACIST');
+            state.canOperateSales = window.RedamsAccess.hasRole(state.profile, 'OWNER', 'ADMIN', 'PHARMACIST', 'CASHIER');
+            $('#user').textContent = state.profile.full_name + ' · ' + (window.RedamsAccess.roleLabel(state.profile) || state.profile.role);
+        }
         document.querySelectorAll('.sidebar [data-page]').forEach(link => { link.hidden = !canAccessPage(link.dataset.page); });
         document.querySelectorAll('.sidebar nav details').forEach(group => {
             group.hidden = ![...group.querySelectorAll('[data-page]')].some(link => !link.hidden);
@@ -89,8 +95,6 @@
             document.querySelectorAll('[data-admin-only]').forEach(item => { item.hidden = !['OWNER', 'ADMIN', 'SUPER_ADMIN'].includes(role); });
             loadAlerts();
             state.canSendNotifications = state.canAdminister;
-            state.canAccessPatientRecords = ['OWNER', 'ADMIN', 'PHARMACIST'].includes(role);
-            state.canOperateSales = ['OWNER', 'ADMIN', 'PHARMACIST', 'CASHIER'].includes(role);
             if (!state.canAdminister) {
                 const securityLink = document.createElement('a');
                 securityLink.dataset.page = 'security'; securityLink.textContent = 'Changer mon mot de passe';
@@ -231,7 +235,7 @@
             document.querySelectorAll('[data-page]').forEach(link => { link.classList.remove('active'); link.removeAttribute('aria-current'); });
             $('#title').textContent = 'Recherche générale'; $('#global-search-input').value = searchTerm; location.hash = searchTerm ? `global-search?q=${encodeURIComponent(searchTerm)}` : 'global-search'; searchPage($('#content'), searchTerm); return;
         }
-        const settingsTabs = ['settings', 'tax', 'workflow', 'backup', 'security', 'codes', 'search'];
+        const settingsTabs = ['settings', 'tax', 'workflow', 'roles', 'backup', 'security', 'codes', 'search'];
         if (settingsTabs.includes(page) || (settingsPage && page === 'patients')) { const activeTab = page === 'settings' ? 'general' : page; document.querySelectorAll('[data-page]').forEach(a => { const active = a.dataset.page === 'settings' || (page === 'security' && a.dataset.page === 'security'); a.classList.toggle('active', active); if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }); $('#title').textContent = 'Paramètres'; location.hash = page === 'settings' ? 'settings' : `settings/${page}`; settings($('#content'), activeTab); return; }
         if (page === 'insurers' || page.startsWith('insurers/')) {
             const activeTab = page === 'insurers/coverages' ? 'coverages' : 'organizations';
@@ -244,6 +248,7 @@
         $('#title').textContent = titles[page] || page; location.hash = page; const root = $('#content'); if (page === 'dashboard') dashboard(); else if (page === 'products') products(root); else if (page === 'movements') movements(root); else if (page === 'alerts') alerts(root); else if (page === 'suppliers') suppliers(root); else if (page === 'purchases') purchases(root); else if (page === 'patients') patients(root); else if (page === 'insurers') insurers(root); else if (page === 'pos') salesPOS(root); else if (page === 'invoices') salesInvoices(root); else if (page === 'cash') cashRegister(root); else if (page === 'reports') reports(root); else if (page === 'users' || page === 'audit') adminModule(root, page); else if (page === 'help') support(root); else if (page === 'platform') platformModule(root); else placeholder(root, page);
     }
     const adminRoleLabels = { OWNER: 'Propriétaire', ADMIN: 'Administrateur', PHARMACIST: 'Pharmacien', STOREKEEPER: 'Gestionnaire de stock', CASHIER: 'Caissier', VIEWER: 'Consultation seule', ACCOUNTANT: 'Expert-comptable' };
+    const displayRole = role => window.RedamsAccess.roleLabel({ role, merge_pharmacist_storekeeper: state.settings.merge_pharmacist_storekeeper }) || adminRoleLabels[role] || role;
     async function adminModule(root, activeTab = 'users') {
         if (!state.canAdminister) { root.innerHTML = '<div class="panel"><h3>Accès réservé</h3><p class="error">Cette section est accessible aux propriétaires et administrateurs de l’établissement.</p></div>'; return; }
         root.innerHTML = `<div class="settings-page"><div class="settings-tabs" role="tablist" aria-label="Administration"><button type="button" class="settings-tab${activeTab === 'users' ? ' active' : ''}" id="admin-tab-users" role="tab" aria-selected="${activeTab === 'users'}" aria-controls="admin-panel-users" data-admin-tab="users">Utilisateurs & rôles</button><button type="button" class="settings-tab${activeTab === 'profiles' ? ' active' : ''}" id="admin-tab-profiles" role="tab" aria-selected="${activeTab === 'profiles'}" aria-controls="admin-panel-profiles" data-admin-tab="profiles">Profils d’accès</button><button type="button" class="settings-tab${activeTab === 'audit' ? ' active' : ''}" id="admin-tab-audit" role="tab" aria-selected="${activeTab === 'audit'}" aria-controls="admin-panel-audit" data-admin-tab="audit">Journal d’activité</button></div><section id="admin-panel-${activeTab}" role="tabpanel" aria-labelledby="admin-tab-${activeTab}"></section></div>`;
@@ -265,7 +270,9 @@
         await renderUsers(panel);
     }
     function renderAccessProfiles(panel) {
-        panel.innerHTML = `<div class="panel admin-role-guide"><h3>Profils d’accès</h3><div class="admin-role-grid">${[['OWNER', 'Propriétaire — accès complet et gestion des administrateurs.'], ['ADMIN', 'Administrateur — gestion opérationnelle et des comptes non privilégiés.'], ['PHARMACIST', 'Pharmacien — ventes, patients et antécédents médicaux.'], ['STOREKEEPER', 'Gestionnaire de stock — produits, mouvements et approvisionnements.'], ['CASHIER', 'Caissier — ventes et opérations de caisse.'], ['VIEWER', 'Consultation seule — aucune opération métier autorisée.'], ['ACCOUNTANT', 'Expert-comptable — accès à la comptabilité de cet établissement et à son mot de passe. Les rapports restent expérimentaux.']].map(([role, description]) => `<article><b>${adminRoleLabels[role]}</b><p>${description}</p></article>`).join('')}</div><p class="admin-security-note">Un compte propriétaire ou administrateur ne peut être modifié que par un propriétaire. Le dernier propriétaire actif ne peut pas être désactivé. Les comptes sont désactivés et conservés dans le journal, jamais supprimés.</p></div>`;
+        const merged = Number(state.settings.merge_pharmacist_storekeeper) === 1;
+        const profiles = [['OWNER', 'Propriétaire — accès complet et gestion des administrateurs.'], ['ADMIN', 'Administrateur — gestion opérationnelle et des comptes non privilégiés.'], ['PHARMACIST', merged ? 'Ventes, patients, stocks et approvisionnements. Caisse uniquement en un temps, sans encaissement des ventes préparées.' : 'Pharmacien — ventes, patients et antécédents médicaux.'], ['STOREKEEPER', 'Gestionnaire de stock — produits, mouvements et approvisionnements.'], ['CASHIER', 'Caissier — ventes et opérations de caisse.'], ['VIEWER', 'Consultation seule — aucune opération métier autorisée.'], ['ACCOUNTANT', 'Expert-comptable — accès à la comptabilité de cet établissement et à son mot de passe. Les rapports restent expérimentaux.']].filter(([role]) => !merged || role !== 'STOREKEEPER');
+        panel.innerHTML = `<div class="panel admin-role-guide"><h3>Profils d’accès</h3><div class="admin-role-grid">${profiles.map(([role, description]) => `<article><b>${displayRole(role)}</b><p>${description}</p></article>`).join('')}</div><p class="admin-security-note">Un compte propriétaire ou administrateur ne peut être modifié que par un propriétaire. Le dernier propriétaire actif ne peut pas être désactivé. Les comptes sont désactivés et conservés dans le journal, jamais supprimés. ${merged ? 'Les rôles d’origine Pharmacien et Gestionnaire de stock sont conservés ; leurs droits sont actuellement fusionnés.' : ''}</p></div>`;
     }
     async function renderUsers(panel) {
         panel.innerHTML = '<div class="panel"><p class="notification-empty">Chargement des utilisateurs…</p></div>';
@@ -275,9 +282,9 @@
             panel.innerHTML = `<div class="panel"><div class="panel-head"><div><h3>Utilisateurs & rôles</h3><p>Gérez les accès des membres de cet établissement. Les changements de rôle prennent effet à leur prochaine requête.</p>${quota ? `<p class="admin-quota">Comptes actifs : <b>${quota.active_users}</b> / ${quota.max_users} selon l’abonnement.</p>` : ''}</div><button class="btn" type="button" data-add-user>＋ Nouvel utilisateur</button></div><div data-users-table></div></div>`;
             const table = panel.querySelector('[data-users-table]');
             mountDataTable(table, {
-                rows: users.map(user => ({ ...user, searchText: `${user.full_name} ${user.email} ${adminRoleLabels[user.role] || user.role} ${user.is_active ? 'actif' : 'désactivé'}` })), searchText: 'Rechercher par nom, e-mail ou rôle…', filters: [{ label: 'Rôle', options: [...new Set(users.map(user => user.role))].map(role => ({ value: role, label: adminRoleLabels[role] || role })), value: user => user.role }, { label: 'Statut', options: [{ value: 'active', label: 'Actif' }, { value: 'inactive', label: 'Désactivé' }], value: user => user.is_active ? 'active' : 'inactive' }], columns: [
+                rows: users.map(user => ({ ...user, searchText: `${user.full_name} ${user.email} ${displayRole(user.role)} ${adminRoleLabels[user.role] || user.role} ${user.is_active ? 'actif' : 'désactivé'}` })), searchText: 'Rechercher par nom, e-mail ou rôle…', filters: [{ label: 'Rôle d’origine', options: [...new Set(users.map(user => user.role))].map(role => ({ value: role, label: adminRoleLabels[role] || role })), value: user => user.role }, { label: 'Statut', options: [{ value: 'active', label: 'Actif' }, { value: 'inactive', label: 'Désactivé' }], value: user => user.is_active ? 'active' : 'inactive' }], columns: [
                     { label: 'Utilisateur', sortValue: user => user.full_name, render: user => `<b>${esc(user.full_name)}</b><small>${esc(user.email)}</small>` },
-                    { label: 'Rôle', sortValue: user => adminRoleLabels[user.role] || user.role, render: user => `<span class="admin-role-badge role-${user.role.toLowerCase()}">${esc(adminRoleLabels[user.role] || user.role)}</span>` },
+                    { label: 'Rôle', sortValue: user => displayRole(user.role), render: user => `<span class="admin-role-badge role-${user.role.toLowerCase()}">${esc(displayRole(user.role))}</span>` },
                     { label: 'Statut', sortValue: user => Number(user.is_active), render: user => user.is_active ? '<span class="report-badge success">Actif</span>' : '<span class="report-badge danger">Désactivé</span>' },
                     { label: 'Créé le', sortValue: user => user.created_at, render: user => esc(new Date(user.created_at).toLocaleDateString('fr-FR')) },
                     { label: 'Actions', render: user => `<button type="button" class="table-action" data-edit-user="${esc(user.id)}" ${adminRoleLabels[user.role] && ['OWNER', 'ADMIN'].includes(user.role) && !canManagePrivileged ? 'disabled title="Réservé au propriétaire"' : ''}>Modifier</button>${Number(user.id) !== state.userId ? `<button type="button" class="table-action${user.is_active ? ' danger' : ''}" data-toggle-user="${esc(user.id)}" ${['OWNER', 'ADMIN'].includes(user.role) && !canManagePrivileged ? 'disabled title="Réservé au propriétaire"' : ''}>${user.is_active ? 'Désactiver' : 'Réactiver'}</button>` : '<small>Compte courant</small>'}` }
@@ -299,7 +306,7 @@
     }
     function userDialog(panel, user, refresh) {
         const owner = state.role === 'OWNER', editablePrivileged = owner || !user || !['OWNER', 'ADMIN'].includes(user.role);
-        const roleOptions = Object.entries(adminRoleLabels).filter(([role]) => role !== 'OWNER' && role !== 'ADMIN' || owner);
+        const roleOptions = Object.entries(adminRoleLabels).filter(([role]) => role !== 'OWNER' && role !== 'ADMIN' || owner).map(([role, label]) => [role, displayRole(role) === label ? label : `${displayRole(role)} (origine : ${label})`]);
         const modal = document.createElement('div'); modal.className = 'overlay admin-user-overlay';
         modal.innerHTML = `<form class="modal admin-user-modal"><button type="button" class="close" aria-label="Fermer">×</button><h3>${user ? 'Modifier un utilisateur' : 'Créer un utilisateur'}</h3><p>Les mots de passe doivent contenir au moins 12 caractères. ${user ? 'Laissez le champ vide pour conserver le mot de passe actuel.' : 'Communiquez le mot de passe initial au membre de manière sécurisée.'}</p><label>Nom complet<input name="full_name" value="${esc(user?.full_name || '')}" maxlength="180" required></label><label>Adresse e-mail<input name="email" type="email" value="${esc(user?.email || '')}" maxlength="190" required></label><label>Rôle<select name="role" ${user && !editablePrivileged ? 'disabled' : ''}>${roleOptions.map(([role, label]) => `<option value="${role}" ${user?.role === role ? 'selected' : ''}>${label}</option>`).join('')}</select></label>${user ? `<label>État du compte<select name="is_active" ${Number(user.id) === state.userId || !editablePrivileged ? 'disabled' : ''}><option value="true" ${user.is_active ? 'selected' : ''}>Actif</option><option value="false" ${!user.is_active ? 'selected' : ''}>Désactivé</option></select></label>` : ''}<label>${user ? 'Nouveau mot de passe (facultatif)' : 'Mot de passe initial'}<input name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" ${user ? '' : 'required'}></label><p class="error" role="alert"></p><div class="admin-modal-actions"><button type="button" class="table-action" data-cancel-user>Annuler</button><button class="btn">${user ? 'Enregistrer les modifications' : 'Créer le compte'}</button></div></form>`;
         document.body.append(modal);
@@ -1363,7 +1370,7 @@
                     { label: 'Quantité', sortValue: movement => Number(movement.quantity), render: movement => esc(movement.quantity) },
                     { label: 'Référence / note', sortValue: movement => movement.reference || '', render: movement => `${esc(movement.reference || '—')}${movement.notes ? `<small>${esc(movement.notes)}</small>` : ''}` },
                     { label: 'Modification', render: movement => `${movement.correction_id ? `<span class="tag">Modifié</span><small>Par ${esc(movement.modified_by_name || '—')} · validé par ${esc(movement.validated_by_name || '—')}</small><small>${esc(movement.corrected_at ? new Date(movement.corrected_at).toLocaleString('fr-FR') : '')} · avant : ${esc(movement.corrected_from)}${movement.correction_reason ? ` · ${esc(movement.correction_reason)}` : ''}</small>` : ''}${movement.pending_id ? `<span class="tag">En attente de validation</span><small>Demandé par ${esc(movement.pending_by_name || '—')} : quantité ${esc(movement.pending_quantity)} · ${esc(movement.pending_reason)}</small>` : ''}` },
-                    { label: 'Actions', render: movement => movement.pending_id ? (state.canAdminister || state.role === 'SUPER_ADMIN' ? `${Number(movement.pending_by_id) !== state.userId || state.role === 'SUPER_ADMIN' ? `<button class="table-action" type="button" data-approve-correction="${esc(movement.pending_id)}">Valider</button>` : ''}<button class="table-action danger" type="button" data-reject-correction="${esc(movement.pending_id)}">Rejeter</button>` : '') : (movement.correctable && ['OWNER', 'ADMIN', 'STOREKEEPER', 'SUPER_ADMIN'].includes(state.role) ? `<button class="table-action" type="button" data-correct-movement="${esc(movement.id)}">Corriger</button>` : '') }
+                    { label: 'Actions', render: movement => movement.pending_id ? (state.canAdminister || state.role === 'SUPER_ADMIN' ? `${Number(movement.pending_by_id) !== state.userId || state.role === 'SUPER_ADMIN' ? `<button class="table-action" type="button" data-approve-correction="${esc(movement.pending_id)}">Valider</button>` : ''}<button class="table-action danger" type="button" data-reject-correction="${esc(movement.pending_id)}">Rejeter</button>` : '') : (movement.correctable && window.RedamsAccess.hasRole(state.profile, 'OWNER', 'ADMIN', 'STOREKEEPER', 'SUPER_ADMIN') ? `<button class="table-action" type="button" data-correct-movement="${esc(movement.id)}">Corriger</button>` : '') }
                 ]
             });
             if (productsList.length) $('#new').onclick = () => movementForm(root);
@@ -1681,6 +1688,7 @@
             const flagsHtml = flags.length ? `<div class="review-flags"><b>Achat à vérifier par un professionnel</b>${flags.map(flag => `<p>${esc(flag.product_name)} — ${esc(flag.message)}</p>`).join('')}<small>Signalement indicatif, non diagnostique et sans blocage automatique.</small></div>` : '';
             modal.innerHTML = `<section class="modal receipt-content"><button type="button" class="close" aria-label="Fermer">×</button><div class="panel-head"><div><small>REÇU DE VENTE</small><h3>${esc(invoice.invoice_number)}</h3><p>${esc(new Date(invoice.created_at).toLocaleString('fr-FR'))}</p></div><button type="button" class="table-action" data-print>Imprimer</button></div><p>Statut : <b>${esc(invoiceStatusLabels[invoice.status] || invoice.status)}</b></p><p>Client : <b>${esc(invoice.patient_name || 'Client non enregistré')}</b></p>${flagsHtml}<div class="tablewrap"><table><thead><tr><th>Produit</th><th>Qté</th><th>PU HT</th><th>Total TTC</th><th>Ordonnance</th><th>Retour</th></tr></thead><tbody>${itemRows}</tbody></table></div><div class="row"><span>Sous-total HT</span><strong>${formatMoney(invoice.subtotal)}</strong></div><div class="row"><span>Taxe (${esc(invoice.tax_rate)} %)</span><strong>${formatMoney(invoice.tax_amount)}</strong></div><div class="row"><b>Total TTC</b><strong>${formatMoney(invoice.total_amount)}</strong></div><h4>Paiements</h4>${paymentRows || '<p class="notification-empty">Aucun paiement enregistré.</p>'}${returnRows ? `<h4>Retours / remboursements</h4>${returnRows}` : ''}${invoice.has_prescription ? '<button type="button" class="table-action" data-view-prescription>Consulter l’ordonnance jointe</button><div data-prescription-preview></div>' : ''}<div class="row"><b>Solde à payer</b><strong>${formatMoney(balance)}</strong></div>${invoice.separate_cashier && balance > 0 && !['cancelled', 'returned'].includes(invoice.status) ? `<p class="notification-empty">Encaissement en caisse par un autre utilisateur.</p>` : ''}<div class="receipt-actions">${invoice.status !== 'cancelled' && invoice.status !== 'returned' && balance > 0 && !invoice.separate_cashier ? '<button type="button" class="btn" data-pay-balance>Enregistrer un paiement</button>' : ''}${invoice.status !== 'cancelled' && invoice.status !== 'returned' ? '<button type="button" class="table-action" data-return-items>Retour / remboursement</button>' : ''}${invoice.status === 'issued' ? '<button type="button" class="table-action danger" data-cancel-invoice>Annuler la facture</button>' : ''}</div></section>`;
             const canPay = canAccessPage('cash') && (!invoice.separate_cashier || (window.RedamsAccess.canCollect(state.profile, { separate_sale_payment: 1 }) && Number(invoice.created_by) !== state.userId));
+            addReceiptIdentity(modal.querySelector('.receipt-content'), invoice.invoice_number);
             const paymentButton = modal.querySelector('[data-pay-balance]');
             if (paymentButton) paymentButton.hidden = !canPay;
             const returnButton = modal.querySelector('[data-return-items]');
@@ -1691,11 +1699,31 @@
             const closeReceipt = () => { if (prescriptionUrl) URL.revokeObjectURL(prescriptionUrl); modal.remove(); };
             modal.querySelector('.close').onclick = closeReceipt; modal.addEventListener('click', event => { if (event.target === modal) closeReceipt(); });
             modal.querySelector('[data-view-prescription]')?.addEventListener('click', async () => { try { const image = await api(`/api/sales/${encodeURIComponent(invoice.id)}/prescription`); if (prescriptionUrl) URL.revokeObjectURL(prescriptionUrl); prescriptionUrl = URL.createObjectURL(image); const preview = document.createElement('img'); preview.src = prescriptionUrl; preview.alt = 'Ordonnance jointe à la facture'; modal.querySelector('[data-prescription-preview]').replaceChildren(preview); } catch (error) { toast(error.message); } });
-            modal.querySelector('[data-print]').onclick = () => { document.body.classList.add('receipt-printing'); window.addEventListener('afterprint', () => document.body.classList.remove('receipt-printing'), { once: true }); window.print(); };
+            modal.querySelector('[data-print]').onclick = async () => {
+                try {
+                    const logo = modal.querySelector('.receipt-identity img');
+                    if (logo) await logo.decode();
+                    document.body.classList.add('receipt-printing');
+                    window.addEventListener('afterprint', () => document.body.classList.remove('receipt-printing'), { once: true }); window.print();
+                } catch (error) { toast('Impression impossible : le logo de l’entreprise ne peut pas être chargé. Vérifiez le logo dans les paramètres.', 'error'); }
+            };
             modal.querySelector('[data-pay-balance]')?.addEventListener('click', () => { closeReceipt(); paymentForm(root, invoice, balance); });
             modal.querySelector('[data-return-items]')?.addEventListener('click', () => { closeReceipt(); returnForm(root, invoice); });
             modal.querySelector('[data-cancel-invoice]')?.addEventListener('click', async () => { const reason = prompt('Motif d’annulation (obligatoire) :'); if (reason === null) return; try { await api(`/api/sales/${encodeURIComponent(invoice.id)}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }); toast('Facture annulée, stock réintégré.'); closeReceipt(); await salesInvoices(root); } catch (error) { toast(error.message); } });
         } catch (error) { toast(error.message); }
+    }
+    function addReceiptIdentity(content, invoiceNumber) {
+        if (!window.JsBarcode) throw Error('Le générateur de codes-barres est indisponible. Rechargez la page puis réessayez.');
+        const identity = document.createElement('div');
+        identity.className = 'receipt-identity';
+        const logo = safeLogoUrl(state.settings.logo_url);
+        identity.innerHTML = `${logo ? `<img src="${esc(logo)}" alt="Logo de l’entreprise">` : ''}<div><h2>${esc(state.settings.company_name || state.profile.organization_name)}</h2>${state.settings.display_name && state.settings.display_name !== state.settings.company_name ? `<p>${esc(state.settings.display_name)}</p>` : ''}<p>${esc(state.settings.company_address || '')}</p><p>${esc([state.settings.company_phone, state.settings.company_email].filter(Boolean).join(' · '))}</p></div>`;
+        const barcode = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        barcode.classList.add('receipt-barcode');
+        barcode.setAttribute('role', 'img'); barcode.setAttribute('aria-label', `Code-barres de la facture ${invoiceNumber}`);
+        window.JsBarcode(barcode, invoiceNumber, { format: 'CODE128', displayValue: true, width: 2, height: 60, margin: 12, fontSize: 14, background: '#ffffff', lineColor: '#000000' });
+        content.prepend(identity);
+        content.append(barcode);
     }
     async function paymentForm(root, invoice, balance, cashPage = null) {
         let coverages = [];
@@ -1714,6 +1742,67 @@
         form.elements.refund_method.onchange = () => { const field = form.querySelector('[data-return-insurer]'); if (field) field.hidden = form.elements.refund_method.value !== 'insurance'; };
         form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; const items = [...form.querySelectorAll('[data-item-id]')].map(field => ({ item_id: field.value, quantity: field.closest('.purchase-item-row').querySelector('[data-return-quantity]').value, restocked: field.closest('.purchase-item-row').querySelector('[data-restock]').checked })).filter(item => Number(item.quantity) > 0), body = { items, refund_method: form.elements.refund_method.value, reason: form.elements.reason.value }; if (body.refund_method === 'insurance') body.insurer_id = form.elements.insurer_id.value; try { const result = await api(`/api/sales/${encodeURIComponent(invoice.id)}/returns`, { method: 'POST', body: JSON.stringify(body) }); modal.remove(); toast(`Retour ${result.return_number} · ${formatMoney(result.refund_amount)} remboursé.`); await saleReceipt(root, invoice.id); await salesInvoices(root); } catch (reason) { error.textContent = reason.message; } };
     }
+    function normalizeInvoiceCode(raw) {
+        const match = String(raw || '').toUpperCase().replace(/\s+/g, '').match(/FAC-\d{8}-\d{6,20}/);
+        return match ? match[0] : '';
+    }
+    function openSaleScanner(root, onCode) {
+        if (document.querySelector('.sale-scanner-overlay')) return null;
+        const modal = document.createElement('div'); modal.className = 'overlay scanner-overlay sale-scanner-overlay';
+        modal.innerHTML = `<section class="modal scanner-modal" role="dialog" aria-modal="true" aria-labelledby="sale-scanner-title"><button type="button" class="close" aria-label="Fermer">×</button><h3 id="sale-scanner-title">Scanner la vente</h3><p>Présentez le code-barres du reçu ou de la facture devant la caméra, ou scannez-le avec le lecteur branché.</p><label>Numéro de facture<input data-sale-scan-code type="text" autocomplete="off" maxlength="60" placeholder="Scannez ici ou saisissez FAC-… puis Entrée"></label><video data-sale-scanner-video playsinline muted hidden></video><button class="btn" type="button" data-sale-start-camera>Activer la caméra</button><p class="notification-empty" data-sale-scanner-status role="status" aria-live="polite">Lecteur de code-barres prêt. La caméra nécessite l’autorisation du navigateur.</p></section>`;
+        document.body.append(modal);
+        const input = modal.querySelector('[data-sale-scan-code]'), status = modal.querySelector('[data-sale-scanner-status]'), video = modal.querySelector('[data-sale-scanner-video]'), cameraButton = modal.querySelector('[data-sale-start-camera]');
+        let reader = null, controls = null, generation = 0, busy = false, closed = false;
+        const stopCamera = () => {
+            generation += 1;
+            const currentControls = controls, currentReader = reader;
+            controls = null; reader = null;
+            video.srcObject?.getTracks?.().forEach(track => track.stop());
+            video.srcObject = null; video.hidden = true;
+            try { currentControls?.stop(); } catch (error) { console.error('Impossible d’arrêter la caméra.', error); }
+            try { currentReader?.reset?.(); } catch (error) { console.error('Impossible de réinitialiser le lecteur.', error); }
+            if (!closed) cameraButton.disabled = false;
+        };
+        const close = () => {
+            if (closed) return;
+            closed = true; stopCamera(); observer.disconnect(); modal.remove();
+        };
+        const submit = async raw => {
+            if (busy || closed) return;
+            const code = normalizeInvoiceCode(raw);
+            if (!code) { status.textContent = 'Code non reconnu : scannez le code-barres d’un reçu ou d’une facture (FAC-…).'; input.select(); return; }
+            busy = true; stopCamera(); input.value = code; status.textContent = `Recherche de la facture ${code}…`;
+            try { await onCode(code); close(); }
+            catch (error) { if (!closed) { status.textContent = error.message || 'Facture introuvable.'; input.focus(); input.select(); } }
+            finally { busy = false; }
+        };
+        const observer = new MutationObserver(() => { if (!root.isConnected || !modal.isConnected) close(); });
+        observer.observe(document.body, { childList: true, subtree: true });
+        modal.querySelector('.close').onclick = close;
+        modal.addEventListener('click', event => { if (event.target === modal) close(); });
+        modal.onkeydown = event => { if (event.key === 'Escape') { event.preventDefault(); close(); } };
+        input.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); submit(input.value); } };
+        cameraButton.onclick = async () => {
+            const current = ++generation, ZXing = window.ZXingBrowser;
+            if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) { status.textContent = 'La caméra nécessite HTTPS et un navigateur compatible. Utilisez le lecteur de code-barres.'; input.focus(); return; }
+            if (!ZXing?.BrowserMultiFormatReader) { status.textContent = 'Le module de lecture caméra est indisponible. Rechargez la page ou utilisez le lecteur de code-barres.'; input.focus(); return; }
+            cameraButton.disabled = true; status.textContent = 'Demande d’accès à la caméra…';
+            try {
+                const instance = new ZXing.BrowserMultiFormatReader(); reader = instance; video.hidden = false;
+                const started = await instance.decodeFromConstraints({ video: { facingMode: { ideal: 'environment' } }, audio: false }, video, result => {
+                    if (result && !closed && !busy && current === generation) submit(result.getText());
+                });
+                if (closed || current !== generation) { started.stop(); instance.reset?.(); return; }
+                controls = started; status.textContent = 'Caméra active. Présentez le code-barres du reçu devant l’objectif.';
+            } catch (error) {
+                if (closed || current !== generation) return;
+                const message = error.name === 'NotAllowedError' ? 'Accès à la caméra refusé. Autorisez-le dans le navigateur ou utilisez le lecteur de code-barres.' : error.name === 'NotFoundError' ? 'Aucune caméra détectée. Utilisez le lecteur de code-barres.' : `Caméra indisponible : ${error.message}`;
+                stopCamera(); status.textContent = message; input.focus();
+            }
+        };
+        input.focus();
+        return { close, submit };
+    }
     async function cashRegister(root, pendingPage = 0) {
         try {
             const data = await api('/api/cash'), session = data.current_session;
@@ -1723,6 +1812,34 @@
             pendingPanel.className = 'panel';
             pendingPanel.innerHTML = `<div class="panel-head"><div><h3>Ventes à encaisser</h3><p>Ventes préparées par un autre utilisateur ; les paiements partiels restent visibles jusqu’au règlement du solde.</p></div></div><div data-pending-sales></div><div class="table-footer"><button class="table-action" type="button" data-pending-prev ${pendingPage === 0 ? 'disabled' : ''}>Précédent</button><span>Page ${pendingPage + 1}</span><button class="table-action" type="button" data-pending-next ${pending.length <= 100 ? 'disabled' : ''}>Suivant</button></div>`;
             root.prepend(pendingPanel);
+            if (state.modules === null || state.modules.includes('sales')) {
+                const openInvoice = async rawNumber => {
+                    const number = normalizeInvoiceCode(rawNumber);
+                    if (!number) throw new Error('Code non reconnu : scannez le code-barres d’un reçu ou d’une facture (FAC-…).');
+                    const found = await api(`/api/sales/by-number/${encodeURIComponent(number)}`);
+                    const invoice = await api(`/api/sales/${encodeURIComponent(found.id)}`);
+                    const balance = Math.max(0, Number(invoice.total_amount) - Number(invoice.returned_value) - Number(invoice.paid_amount) + Number(invoice.refunded_amount));
+                    const collectable = session && balance > 0 && !['cancelled', 'returned'].includes(invoice.status) && (!invoice.separate_cashier || (window.RedamsAccess.canCollect(state.profile, { separate_sale_payment: 1 }) && Number(invoice.created_by) !== state.userId));
+                    if (collectable) await paymentForm(root, invoice, balance, pendingPage);
+                    else await saleReceipt(root, found.id);
+                };
+                const head = pendingPanel.querySelector('.panel-head');
+                const scanButton = document.createElement('button');
+                scanButton.type = 'button'; scanButton.className = 'btn'; scanButton.dataset.scanSale = ''; scanButton.textContent = '▦ Scanner la vente';
+                head.append(scanButton);
+                scanButton.onclick = () => openSaleScanner(root, openInvoice);
+                const scanForm = document.createElement('form');
+                scanForm.innerHTML = `<label>Scanner ou saisir le numéro de facture<input name="invoice_number" autocomplete="off" placeholder="FAC-…" required maxlength="33"></label><button class="table-action">Ouvrir la facture</button><p class="error" role="alert"></p>`;
+                pendingPanel.querySelector('[data-pending-sales]').before(scanForm);
+                scanForm.onsubmit = async event => {
+                    event.preventDefault();
+                    const error = scanForm.querySelector('.error'), button = scanForm.querySelector('button');
+                    error.textContent = ''; button.disabled = true;
+                    try { await openInvoice(scanForm.elements.invoice_number.value); }
+                    catch (reason) { error.textContent = reason.message; }
+                    finally { button.disabled = false; }
+                };
+            }
             mountDataTable(pendingPanel.querySelector('[data-pending-sales]'), {
                 rows: pending.slice(0, 100).map(item => ({ ...item, searchText: [item.invoice_number, item.patient_name, item.seller_name, item.status].join(' ') })),
                 searchText: 'Rechercher par facture, client ou vendeur…',
@@ -1797,7 +1914,7 @@
         form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; const body = { movement_type: type, payment_method: form.elements.payment_method.value, amount: form.elements.amount.value, description: form.elements.description.value }; try { await api('/api/cash/movements', { method: 'POST', body: JSON.stringify(body) }); modal.remove(); toast(type === 'income' ? 'Recette enregistrée.' : 'Dépense enregistrée.'); await cashRegister(root); } catch (reason) { error.textContent = reason.message; } };
     }
     async function settings(root, activeTab = 'general') {
-        const tabs = [['general', 'Généraux & identité'], ['workflow', 'Circuit de vente'], ['tax', 'Fiscalité & reçus'], ['patients', 'Dossiers patients'], ['backup', 'Sauvegarde & restauration'], ['security', 'Sécurité & mot de passe'], ['codes', 'QR & codes-barres'], ['search', 'Index de recherche']].filter(([id]) => state.canAdminister || id === 'security');
+        const tabs = [['general', 'Généraux & identité'], ['workflow', 'Circuit de vente'], ['roles', 'Fusion des rôles'], ['tax', 'Fiscalité & reçus'], ['patients', 'Dossiers patients'], ['backup', 'Sauvegarde & restauration'], ['security', 'Sécurité & mot de passe'], ['codes', 'QR & codes-barres'], ['search', 'Index de recherche']].filter(([id]) => state.canAdminister || id === 'security');
         if (!tabs.some(([id]) => id === activeTab)) activeTab = 'general';
         if (!state.canAdminister && activeTab !== 'security') { root.innerHTML = '<div class="panel"><h3>Accès réservé</h3><p class="error" role="alert">Les paramètres de l’établissement sont réservés aux propriétaires et administrateurs.</p></div>'; return; }
         root.innerHTML = `<div class="settings-page"><div class="settings-tabs" role="tablist" aria-label="Sections des paramètres">${tabs.map(([id, label]) => `<button type="button" class="settings-tab${activeTab === id ? ' active' : ''}" role="tab" aria-selected="${activeTab === id}" data-settings-tab="${id}">${label}</button>`).join('')}</div><div id="settings-panel" role="tabpanel"></div></div>`;
@@ -1857,6 +1974,24 @@
                 const s = await api('/api/settings'); if (!panel.isConnected) return;
                 panel.innerHTML = `<div class="panel settings"><small>PARAMÈTRES DES VENTES</small><h3>Fiscalité & reçus</h3><p>Le prix catalogue est hors taxe. Ce taux est appliqué aux nouvelles ventes et figé sur chaque reçu émis.</p><form id="sales-tax-settings"><label>Taux de taxe (%)<input name="sales_tax_rate" type="number" min="0" max="100" step="0.01" value="${esc(s.sales_tax_rate ?? 0)}" required></label><button class="btn">Enregistrer le taux</button><p class="error" role="alert"></p></form></div>`;
                 $('#sales-tax-settings').onsubmit = async event => { event.preventDefault(); const form = event.currentTarget, error = form.querySelector('.error'); error.textContent = ''; try { await api('/api/settings', { method: 'PUT', body: JSON.stringify({ sales_tax_rate: form.elements.sales_tax_rate.value }) }); state.settings = { ...state.settings, sales_tax_rate: form.elements.sales_tax_rate.value }; toast('Taux de taxe enregistré.'); } catch (reason) { error.textContent = reason.message; } };
+            } catch (error) { if (panel.isConnected) panel.innerHTML = `<div class="panel"><p class="error">${esc(error.message)}</p></div>`; }
+            return;
+        }
+        if (activeTab === 'roles') {
+            try {
+                const s = await api('/api/settings'); if (!panel.isConnected) return;
+                panel.innerHTML = `<section class="panel settings"><h3>Fusion pharmacien / gestionnaire de stock</h3><p>Lorsqu’elle est activée, tous les pharmaciens et gestionnaires de stock partagent les droits des deux rôles, dans les limites du forfait. En deux temps, ces utilisateurs saisissent les ventes mais n’encaissent pas. Les rôles enregistrés ne changent pas : désactiver la fusion rétablit les droits d’origine.</p><form><label><input type="checkbox" name="merged" ${Number(s.merge_pharmacist_storekeeper) ? 'checked' : ''}> Fusionner les droits</label><button class="btn">Enregistrer</button><p class="error" role="alert"></p></form></section>`;
+                panel.querySelector('form').onsubmit = async event => {
+                    event.preventDefault();
+                    const form = event.currentTarget, button = form.querySelector('button'), error = form.querySelector('.error');
+                    button.disabled = true; error.textContent = '';
+                    try {
+                        const result = await api('/api/settings/role-merger', { method: 'PUT', body: JSON.stringify({ merge_pharmacist_storekeeper: form.elements.merged.checked }) });
+                        state.settings.merge_pharmacist_storekeeper = result.merge_pharmacist_storekeeper;
+                        refreshAccess(); toast(result.message);
+                    } catch (reason) { error.textContent = reason.message; }
+                    finally { button.disabled = false; }
+                };
             } catch (error) { if (panel.isConnected) panel.innerHTML = `<div class="panel"><p class="error">${esc(error.message)}</p></div>`; }
             return;
         }
@@ -1983,7 +2118,66 @@
         panel.innerHTML = `<div class="panel"><p class="error">Cette section de paramètres est inconnue.</p></div>`;
     }
     function renderNotifications(rows, unreadCount, hasMore) { const list = $('#notifications-list'), badge = $('#notification-count'); badge.hidden = Number(unreadCount) === 0; badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount); list.innerHTML = rows.length ? rows.map(row => `<article class="notification-item${row.read_at ? '' : ' unread'}"><h4>${esc(row.title)}</h4><p>${esc(row.message)}</p><div class="notification-meta">${row.audience === 'organization' ? 'Générale' : 'Privée'} · ${esc(row.sender_name)} · ${new Date(row.created_at).toLocaleString('fr-FR')}</div>${row.read_at ? '' : `<button type="button" class="notification-read" data-notification-read="${esc(row.id)}">Marquer comme lue</button>`}</article>`).join('') : '<p class="notification-empty">Aucune notification reçue.</p>'; $('#notification-load-more').hidden = !hasMore; }
-    async function refreshNotifications(reset = true) { if (reset) { state.notifications = []; state.notificationsOffset = 0; } const result = await api(`/api/notifications?offset=${state.notificationsOffset}`); state.notifications.push(...result.items); state.notificationsOffset += result.items.length; renderNotifications(state.notifications, result.unreadCount, result.hasMore); }
+    let notificationWatermark = null, notificationContext = null, notificationAudioStarting = false, notificationSoundEnabled = true;
+    const soundButton = document.createElement('button');
+    soundButton.type = 'button'; soundButton.className = 'table-action';
+    soundButton.textContent = 'Activer le son des notifications';
+    $('#notifications-panel').prepend(soundButton);
+    async function unlockNotificationSound() {
+        if (!notificationSoundEnabled || notificationAudioStarting || !state.role || state.role === 'ACCOUNTANT') return;
+        notificationAudioStarting = true;
+        try {
+            if (!window.AudioContext) throw Error('Les notifications sonores ne sont pas prises en charge par ce navigateur.');
+            notificationContext ||= new window.AudioContext();
+            if (notificationContext.state !== 'running') await notificationContext.resume();
+            if (notificationContext.state !== 'running') throw Error('Le navigateur bloque le son. Cliquez sur « Activer le son des notifications ».');
+            soundButton.textContent = 'Désactiver le son des notifications'; soundButton.setAttribute('aria-pressed', 'true');
+        } catch (error) { notificationSoundEnabled = false; soundButton.textContent = 'Réessayer d’activer le son'; toast(error.message, 'warning'); }
+        finally { notificationAudioStarting = false; }
+    }
+    soundButton.onclick = async () => {
+        if (notificationSoundEnabled && notificationContext?.state === 'running') {
+            notificationSoundEnabled = false; soundButton.textContent = 'Activer le son des notifications'; soundButton.setAttribute('aria-pressed', 'false');
+        } else { notificationSoundEnabled = true; await unlockNotificationSound(); }
+    };
+    const startNotificationAudio = () => {
+        if (!notificationContext && notificationSoundEnabled) unlockNotificationSound();
+    };
+    document.addEventListener('pointerdown', startNotificationAudio);
+    document.addEventListener('keydown', startNotificationAudio);
+    function signalNewNotifications(items) {
+        const ids = items.map(item => BigInt(item.id));
+        const latest = ids.reduce((maximum, id) => id > maximum ? id : maximum, notificationWatermark ?? 0n);
+        const count = notificationWatermark === null ? 0 : ids.filter(id => id > notificationWatermark).length;
+        notificationWatermark = latest;
+        if (!count || !notificationSoundEnabled) return;
+        if (!notificationContext || notificationContext.state !== 'running') {
+            toast('Nouvelle notification reçue. Activez le son dans le panneau des notifications pour entendre le bip.', 'warning'); return;
+        }
+        try {
+            for (let index = 0; index < count; index++) {
+                const oscillator = notificationContext.createOscillator(), gain = notificationContext.createGain();
+                const start = notificationContext.currentTime + index * 0.3;
+                oscillator.frequency.value = 880;
+                gain.gain.setValueAtTime(0, start); gain.gain.linearRampToValueAtTime(0.15, start + 0.01); gain.gain.linearRampToValueAtTime(0, start + 0.18);
+                oscillator.connect(gain); gain.connect(notificationContext.destination);
+                oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+                oscillator.start(start); oscillator.stop(start + 0.2);
+            }
+        } catch (error) { toast(`Signal sonore impossible : ${error.message}`, 'warning'); }
+    }
+    async function refreshNotifications(reset = true) {
+        if (state.notificationRequest) return state.notificationRequest;
+        const offset = reset ? 0 : state.notificationsOffset;
+        state.notificationRequest = (async () => {
+            const result = await api(`/api/notifications?offset=${offset}`);
+            if (reset) { signalNewNotifications(result.items); state.notifications = []; }
+            state.notifications.push(...result.items); state.notificationsOffset = offset + result.items.length;
+            renderNotifications(state.notifications, result.unreadCount, result.hasMore);
+        })();
+        try { await state.notificationRequest; }
+        finally { state.notificationRequest = null; }
+    }
     async function loadNotificationRecipients() { const recipients = await api('/api/notifications/recipients'); $('#notification-recipient-field select').innerHTML = recipients.map(user => `<option value="${esc(user.id)}">${esc(user.full_name)} · ${esc(user.email)}</option>`).join(''); }
     document.addEventListener('click', async e => { const a = e.target.closest('[data-page],[data-go]'); if (a) { e.preventDefault(); go(a.dataset.page || a.dataset.go); return; } const read = e.target.closest('[data-notification-read]'); if (read) { try { await api(`/api/notifications/${encodeURIComponent(read.dataset.notificationRead)}/read`, { method: 'POST' }); await refreshNotifications(); } catch (error) { toast(error.message); } return; } });
     $('#global-search-form').onsubmit = event => { event.preventDefault(); go('global-search', $('#global-search-input').value); };
@@ -2018,7 +2212,7 @@
     const fmtDate = value => value ? new Date(value).toLocaleDateString(window.i18n?.lang === 'en' ? 'en-GB' : 'fr-FR') : '—';
     function showProfile() {
         const user = state.profile || {};
-        infoModal('Mon profil', `<dl class="profile-list"><dt>Nom</dt><dd>${esc(user.full_name)}</dd><dt>Courriel</dt><dd>${esc(user.email)}</dd><dt>Rôle</dt><dd>${esc(user.role)}</dd><dt>Établissement</dt><dd>${esc(user.organization_name)}</dd></dl><p class="notification-empty">Pour changer votre mot de passe, ouvrez Paramètres › Sécurité & mot de passe.</p>`);
+        infoModal('Mon profil', `<dl class="profile-list"><dt>Nom</dt><dd>${esc(user.full_name)}</dd><dt>Courriel</dt><dd>${esc(user.email)}</dd><dt>Rôle</dt><dd>${esc(window.RedamsAccess.roleLabel(user) || user.role)}</dd><dt>Établissement</dt><dd>${esc(user.organization_name)}</dd></dl><p class="notification-empty">Pour changer votre mot de passe, ouvrez Paramètres › Sécurité & mot de passe.</p>`);
     }
     async function showSubscription() {
         const overlay = infoModal('Mon abonnement', '<p class="notification-empty">Chargement…</p>'), box = overlay.querySelector('.modal');
@@ -2054,5 +2248,11 @@
     });
     $('#notifications-button').addEventListener('click', () => { if (!$('#notifications-panel').hidden) setAlertsOpen(false); });
     setInterval(() => { if (state.role && !document.hidden) loadAlerts(); }, 60000);
+    let notificationPollError = false;
+    setInterval(async () => {
+        if (!state.role || state.role === 'ACCOUNTANT' || state.notificationRequest) return;
+        try { await refreshNotifications(); notificationPollError = false; }
+        catch (error) { if (!notificationPollError) toast(`Notifications indisponibles : ${error.message}`, 'error'); notificationPollError = true; }
+    }, 10000);
     $('#logout').onclick = logout; boot();
 })();
