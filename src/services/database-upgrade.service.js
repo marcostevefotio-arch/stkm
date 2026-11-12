@@ -406,14 +406,14 @@ function backupFileName() {
     return `redams-${safeName}-${timestamp}-${crypto.randomBytes(6).toString('hex')}.sql`;
 }
 
-async function createDatabaseBackup() {
+async function createDatabaseBackup({ spawnProcess = spawn, targetDirectory = backupDirectory } = {}) {
     if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
         throw backupError('Configuration DB_HOST, DB_USER ou DB_NAME manquante; la sauvegarde est bloquée.');
     }
-    try { await fs.promises.mkdir(backupDirectory, { recursive: true }); }
+    try { await fs.promises.mkdir(targetDirectory, { recursive: true }); }
     catch (error) { throw backupError(`Impossible de préparer le dossier de sauvegarde; migration bloquée. ${error.message}`); }
     const filename = backupFileName();
-    const filePath = path.join(backupDirectory, filename);
+    const filePath = path.join(targetDirectory, filename);
     const args = [
         `--host=${process.env.DB_HOST}`,
         `--port=${process.env.DB_PORT || '3306'}`,
@@ -428,31 +428,44 @@ async function createDatabaseBackup() {
         '--quick',
         process.env.DB_NAME
     ];
-    const child = spawn(process.env.MYSQLDUMP_PATH || 'mysqldump', args, {
-        env: { ...process.env, MYSQL_PWD: process.env.DB_PASSWORD || '' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true
-    });
-    const output = fs.createWriteStream(filePath, { flags: 'wx' });
-    let fileCreated = false;
-    output.once('open', () => { fileCreated = true; });
-    let stderr = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', chunk => { if (stderr.length < 4000) stderr += chunk.slice(0, 4000 - stderr.length); });
-    try {
-        const exit = new Promise((resolve, reject) => {
-            child.once('error', reject);
-            child.once('close', code => code === 0 ? resolve() : reject(new Error(stderr.trim() || `mysqldump exited with code ${code}`)));
+    const dumpPath = process.env.MYSQLDUMP_PATH || 'mysqldump';
+    const writeDump = async dumpArgs => {
+        const child = spawnProcess(dumpPath, dumpArgs, {
+            env: { ...process.env, MYSQL_PWD: process.env.DB_PASSWORD || '' },
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true
         });
-        await Promise.all([pipeline(child.stdout, output), exit]);
-        const details = await fs.promises.stat(filePath);
-        if (!details.size) throw new Error('mysqldump returned an empty backup.');
-        return { filename, size: details.size, created_at: details.mtime.toISOString() };
-    } catch (error) {
-        if (fileCreated) {
-            try { await fs.promises.rm(filePath); }
-            catch (cleanupError) { throw backupError(`${error.message || error} La sauvegarde partielle n’a pas pu être supprimée: ${cleanupError.message}`, 500); }
+        const output = fs.createWriteStream(filePath, { flags: 'wx' });
+        let fileCreated = false;
+        output.once('open', () => { fileCreated = true; });
+        let stderr = '';
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', chunk => { if (stderr.length < 4000) stderr += chunk.slice(0, 4000 - stderr.length); });
+        try {
+            const exit = new Promise((resolve, reject) => {
+                child.once('error', reject);
+                child.once('close', code => code === 0 ? resolve() : reject(new Error(stderr.trim() || `mysqldump exited with code ${code}`)));
+            });
+            await Promise.all([pipeline(child.stdout, output), exit]);
+            const details = await fs.promises.stat(filePath);
+            if (!details.size) throw new Error('mysqldump returned an empty backup.');
+            return { filename, size: details.size, created_at: details.mtime.toISOString() };
+        } catch (error) {
+            if (fileCreated) {
+                try { await fs.promises.rm(filePath); }
+                catch (cleanupError) { throw backupError(`${error.message || error} La sauvegarde partielle n’a pas pu être supprimée: ${cleanupError.message}`, 500); }
+            }
+            throw error;
         }
+    };
+    try {
+        try {
+            return await writeDump(args);
+        } catch (error) {
+            if (!/unknown variable ['"]?set-gtid-purged=off/i.test(String(error.message || error))) throw error;
+            return await writeDump(args.filter(argument => argument !== '--set-gtid-purged=OFF'));
+        }
+    } catch (error) {
         if (error.code === 'ENOENT') {
             throw backupError('mysqldump est introuvable. Installez les outils client MySQL ou configurez MYSQLDUMP_PATH; aucune migration n’a été appliquée.');
         }

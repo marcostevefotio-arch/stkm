@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { getStatus, runMigration } = require('../src/services/database-upgrade.service');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
+const { getStatus, runMigration, createDatabaseBackup } = require('../src/services/database-upgrade.service');
 
 function fakeConnection({ history = [], events = [] } = {}) {
     return {
@@ -49,6 +54,40 @@ test('database logo migration adds nullable MIME and binary columns after backup
     assert.match(ddl[0], /logo_mime_type` VARCHAR\(30\) NULL/);
     assert.match(ddl[1], /logo_data` LONGBLOB NULL/);
     assert.ok(ddl.every(sql => connection.events.indexOf(sql) > connection.events.indexOf('BACKUP_VERIFIED')));
+});
+
+test('database backup retries without the unsupported GTID option', async t => {
+    const targetDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'redams-mysqldump-'));
+    const originalEnv = Object.fromEntries(['DB_HOST', 'DB_USER', 'DB_NAME', 'DB_PASSWORD', 'DB_PORT'].map(key => [key, process.env[key]]));
+    Object.assign(process.env, { DB_HOST: 'localhost', DB_USER: 'test', DB_NAME: 'test_database', DB_PASSWORD: '', DB_PORT: '3306' });
+    t.after(async () => {
+        for (const [key, value] of Object.entries(originalEnv)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+        await fs.rm(targetDirectory, { recursive: true, force: true });
+    });
+
+    const calls = [];
+    const spawnProcess = (command, args) => {
+        calls.push({ command, args });
+        const child = new EventEmitter();
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        setImmediate(() => {
+            child.stderr.end(calls.length === 1 ? "mysqldump: unknown variable 'set-gtid-purged=OFF'" : '');
+            child.stdout.end(calls.length === 1 ? '' : 'verified SQL backup');
+            setImmediate(() => child.emit('close', calls.length === 1 ? 1 : 0));
+        });
+        return child;
+    };
+
+    const result = await createDatabaseBackup({ spawnProcess, targetDirectory });
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0].args.includes('--set-gtid-purged=OFF'));
+    assert.ok(!calls[1].args.includes('--set-gtid-purged=OFF'));
+    assert.equal(result.size, Buffer.byteLength('verified SQL backup'));
+    assert.equal(await fs.readFile(path.join(targetDirectory, result.filename), 'utf8'), 'verified SQL backup');
 });
 
 test('separated sales migration adds default-off fields only after backup', async () => {
