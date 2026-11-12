@@ -5,6 +5,8 @@ const {recordBuiltInMigration,verifyBuiltInMigrationSchema}=require('../src/serv
 const columnMigrations=[
  ['users','password_version','INT UNSIGNED NOT NULL DEFAULT 0'],
  ['organization_settings','default_label_format',"VARCHAR(20) NOT NULL DEFAULT 'barcode'"],
+ ['organization_settings','logo_mime_type','VARCHAR(30) NULL'],
+ ['organization_settings','logo_data','LONGBLOB NULL'],
  ['support_tickets','support_token','CHAR(32) NULL'],
  ['support_tickets','assigned_agent_id','BIGINT UNSIGNED NULL'],
  ['support_tickets','assigned_staff_id','BIGINT UNSIGNED NULL'],
@@ -92,6 +94,8 @@ async function ensureForeignKey(table,column,referencedTable,referencedColumn,co
  await recordBuiltInMigration(db,'2026110701_separate_sale_payment');
  await verifyBuiltInMigrationSchema(db,'2026110702_merge_pharmacist_storekeeper');
  await recordBuiltInMigration(db,'2026110702_merge_pharmacist_storekeeper');
+ await verifyBuiltInMigrationSchema(db,'2026111201_database_logo_storage');
+ await recordBuiltInMigration(db,'2026111201_database_logo_storage');
  await db.execute(
   `INSERT IGNORE INTO account_email_claims(email,user_id)
    SELECT LOWER(email),MIN(id) FROM users GROUP BY LOWER(email)`
@@ -123,7 +127,7 @@ async function ensureForeignKey(table,column,referencedTable,referencedColumn,co
   ['Comment ajouter un produit ou corriger son stock ?','Ouvrez « Catalogue produits » pour créer ou modifier une fiche. Utilisez « Mouvements » pour enregistrer une entrée, une sortie ou un ajustement; chaque mouvement conserve sa traçabilité.','Stocks',10],
   ['Comment scanner un produit à la vente ?','Dans le point de vente, utilisez « Scanner un code ». Une douchette USB/Bluetooth fonctionne comme un clavier; la caméra nécessite une autorisation du navigateur et une connexion HTTPS ou localhost.','Ventes',20],
   ['Pourquoi une vente est-elle refusée ?','Une session de caisse doit être ouverte. Vérifiez aussi que le produit est actif, que sa quantité est suffisante et qu’une ordonnance est jointe lorsqu’elle est requise.','Ventes',30],
-  ['Comment récupérer mes données ?','Les propriétaires et administrateurs peuvent télécharger une sauvegarde JSON dans Paramètres > Sauvegarde & restauration. Les logos du dossier public/uploads/logos doivent être sauvegardés séparément.','Données',40],
+  ['Comment récupérer mes données ?','Les propriétaires et administrateurs peuvent télécharger une sauvegarde JSON dans Paramètres > Sauvegarde & restauration. Les logos enregistrés en base depuis la migration 2026111201_database_logo_storage sont inclus; les anciens logos du dossier public/uploads/logos doivent être téléversés de nouveau.','Données',40],
   ['Qui peut suivre une demande d’assistance ?','Chaque membre voit ses propres demandes. Les demandes de chat sont transmises à l’équipe REDAMS : un agent disponible peut les prendre en charge. Si aucun agent n’est disponible, le chat reste dans la file d’attente.','Assistance',50],
   ['Comment gérer mon abonnement ?','Contactez l’équipe REDAMS depuis le chat d’assistance pour toute question sur votre forfait ou son renouvellement.','Abonnement',60],
   ['Comment obtenir une formation ?','Consultez les ressources de formation dans Assistance ou contactez notre équipe pour organiser un accompagnement.','Formation',70]

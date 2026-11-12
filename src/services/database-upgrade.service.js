@@ -274,6 +274,40 @@ const migrations = [{
             await connection.execute('ALTER TABLE `organization_settings` ADD COLUMN `merge_pharmacist_storekeeper` TINYINT(1) NOT NULL DEFAULT 0');
         }
     }
+},{
+    id: '2026111201_database_logo_storage',
+    description: 'Stocker les logos des établissements dans MySQL pour les conserver lors des déploiements.',
+    definition: 'Add nullable organization_settings.logo_mime_type VARCHAR(30) and logo_data LONGBLOB.',
+    async inspect(connection) {
+        const [tables] = await connection.execute(
+            "SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='organization_settings'"
+        );
+        if (!tables.length || String(tables[0].ENGINE).toLowerCase() !== 'innodb') {
+            return { ready: false, reason: 'La table organization_settings doit exister avec le moteur InnoDB.', steps: [] };
+        }
+        const [columns] = await connection.execute(
+            "SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='organization_settings' AND COLUMN_NAME IN ('logo_mime_type','logo_data')"
+        );
+        const expected = { logo_mime_type: 'varchar(30)', logo_data: 'longblob' };
+        const steps = [];
+        for (const [column, type] of Object.entries(expected)) {
+            const existing = columns.find(item => item.COLUMN_NAME === column);
+            if (existing && (String(existing.COLUMN_TYPE).toLowerCase() !== type || existing.IS_NULLABLE !== 'YES')) {
+                return { ready: false, reason: `La colonne organization_settings.${column} possède une définition incompatible.`, steps: [] };
+            }
+            if (!existing) steps.push({ action: 'add_column', table: 'organization_settings', column, description: `Ajouter organization_settings.${column} pour le stockage persistant des logos.` });
+        }
+        return { ready: true, reason: null, steps };
+    },
+    async apply(connection, steps) {
+        const definitions = { logo_mime_type: 'VARCHAR(30) NULL', logo_data: 'LONGBLOB NULL' };
+        for (const step of steps) {
+            if (step.action !== 'add_column' || step.table !== 'organization_settings' || !Object.hasOwn(definitions, step.column)) {
+                throw new Error('Étape de stockage des logos invalide.');
+            }
+            await connection.execute(`ALTER TABLE \`organization_settings\` ADD COLUMN \`${step.column}\` ${definitions[step.column]}`);
+        }
+    }
 }].map(migration => ({
     ...migration,
     checksum: crypto.createHash('sha256')

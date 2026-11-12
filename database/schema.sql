@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS accounting_entries (
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS organization_settings (
  organization_id BIGINT UNSIGNED PRIMARY KEY, display_name VARCHAR(180), logo_url VARCHAR(500),
+ logo_mime_type VARCHAR(30) NULL, logo_data LONGBLOB NULL,
  primary_color CHAR(7) NOT NULL DEFAULT '#145C4B', secondary_color CHAR(7) NOT NULL DEFAULT '#D7A84B',
  locale VARCHAR(8) NOT NULL DEFAULT 'fr', currency CHAR(3) NOT NULL DEFAULT 'XAF',
  timezone VARCHAR(80) NOT NULL DEFAULT 'Africa/Douala', date_format VARCHAR(30) NOT NULL DEFAULT 'DD/MM/YYYY',

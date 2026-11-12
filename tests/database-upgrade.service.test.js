@@ -14,6 +14,7 @@ function fakeConnection({ history = [], events = [] } = {}) {
             if (sql.includes("COLUMN_NAME='separate_sale_payment'")) return [[], []];
             if (sql.includes('SELECT TABLE_NAME')) return [[{ TABLE_NAME: 'plans' }, { TABLE_NAME: 'platform_promotions' }, { TABLE_NAME: 'products' }, { TABLE_NAME: 'sales_invoice_items' }], []];
             if (sql.includes("TABLE_NAME='users' AND COLUMN_NAME='role'")) return [[{ COLUMN_TYPE: "enum('OWNER','ADMIN','PHARMACIST','STOREKEEPER','CASHIER','VIEWER','SUPER_ADMIN')", IS_NULLABLE: 'NO', COLUMN_DEFAULT: 'VIEWER' }], []];
+            if (sql.includes('SELECT COLUMN_NAME,COLUMN_TYPE')) return [[], []];
             if (sql.includes('SELECT COLUMN_TYPE')) return [[], []];
             if (sql.includes('SELECT REFERENCED_TABLE_NAME')) return [[], []];
             if (sql.includes('SELECT checksum FROM database_migration_history')) return [history, []];
@@ -29,10 +30,25 @@ function fakeConnection({ history = [], events = [] } = {}) {
 test('database migration status previews additive changes without applying them', async () => {
     const connection = fakeConnection();
     const status = await getStatus(connection);
-    assert.equal(status.items.length, 8);
+    assert.equal(status.items.length, 9);
     assert.equal(status.items[0].status, 'pending');
     assert.deepEqual(status.items[0].steps.map(step => step.action), ['add_column', 'add_foreign_key']);
     assert.equal(connection.events.some(sql => sql.startsWith('ALTER TABLE')), false);
+});
+
+test('database logo migration adds nullable MIME and binary columns after backup', async () => {
+    const connection = fakeConnection();
+    const migration = (await getStatus(connection)).items.find(item => item.id === '2026111201_database_logo_storage');
+    assert.equal(migration.status, 'pending');
+    assert.deepEqual(migration.steps.map(step => step.column), ['logo_mime_type', 'logo_data']);
+    await runMigration({ migrationId: migration.id, staffId: 1, reviewed: true,
+        connectionPool: { getConnection: async () => connection },
+        backup: async () => { connection.events.push('BACKUP_VERIFIED'); return { filename: 'backup.sql', size: 12 }; }
+    });
+    const ddl = connection.events.filter(sql => typeof sql === 'string' && sql.startsWith('ALTER TABLE `organization_settings` ADD COLUMN'));
+    assert.match(ddl[0], /logo_mime_type` VARCHAR\(30\) NULL/);
+    assert.match(ddl[1], /logo_data` LONGBLOB NULL/);
+    assert.ok(ddl.every(sql => connection.events.indexOf(sql) > connection.events.indexOf('BACKUP_VERIFIED')));
 });
 
 test('separated sales migration adds default-off fields only after backup', async () => {

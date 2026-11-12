@@ -3,13 +3,13 @@ const assert=require('node:assert/strict');
 const express=require('express');
 const db=require('../src/config/database');
 const settingsRoutes=require('../src/routes/settings.routes');
-const fs=require('node:fs/promises');
-const path=require('node:path');
+const publicRoutes=require('../src/routes/public.routes');
 
 async function listen(t,role='ADMIN'){
  const app=express();app.use(express.json());
  app.use((req,res,next)=>{req.tenantId=42;req.user={id:7,role};next();});
  app.use('/api/settings',settingsRoutes);
+ app.use('/api/public',publicRoutes);
  const server=app.listen(0);
  t.after(()=>new Promise(resolve=>server.close(resolve)));
  await new Promise(resolve=>server.once('listening',resolve));
@@ -63,19 +63,26 @@ test('logo upload rejects a file whose bytes do not match its image type',async(
  assert.equal(calls,0);
 });
 
-test('logo upload saves the file and its tenant-scoped URL',async(t)=>{
- const originalExecute=db.execute;let savedLogoUrl;
- db.execute=async(sql,values)=>{savedLogoUrl=values[1];return [{affectedRows:1},[]];};
+test('logo upload stores image bytes in the database and serves the saved logo',async(t)=>{
+ const originalExecute=db.execute;let saved;
+ db.execute=async(sql,values)=>{
+  if(sql.startsWith('INSERT INTO organization_settings')){saved={logoUrl:values[1],mime:values[2],image:values[3]};return [{affectedRows:1},[]];}
+  if(sql.startsWith('SELECT logo_mime_type,logo_data'))return [[{logo_mime_type:saved.mime,logo_data:saved.image}],[]];
+  throw Error(`Unexpected SQL: ${sql}`);
+ };
  t.after(()=>{db.execute=originalExecute;});
  const url=await listen(t),pngHeader=Buffer.from([137,80,78,71,13,10,26,10]);
  const response=await fetch(`${url}/logo`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data_url:`data:image/png;base64,${pngHeader.toString('base64')}`})});
  const result=await response.json();
  assert.equal(response.status,200);
- assert.match(result.logo_url,/^\/uploads\/logos\/organization-42-[\da-f-]+\.png$/);
- assert.equal(savedLogoUrl,result.logo_url);
- const savedPath=path.join(__dirname,'..','public','uploads','logos',path.basename(result.logo_url));
- t.after(async()=>{await fs.unlink(savedPath);});
- assert.deepEqual(await fs.readFile(savedPath),pngHeader);
+ assert.match(result.logo_url,/^\/api\/public\/logos\/42\/[\da-f-]+\.png$/);
+ assert.equal(saved.logoUrl,result.logo_url);
+ assert.equal(saved.mime,'image/png');
+ assert.deepEqual(saved.image,pngHeader);
+ const logo=await fetch(new URL(result.logo_url,url));
+ assert.equal(logo.status,200);
+ assert.equal(logo.headers.get('content-type'),'image/png');
+ assert.deepEqual(Buffer.from(await logo.arrayBuffer()),pngHeader);
 });
 
 test('label preference only accepts QR or Code 128 and is persisted',async(t)=>{

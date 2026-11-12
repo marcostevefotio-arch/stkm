@@ -14,11 +14,28 @@ const validDate=value=>{
  const date=new Date(`${value}T00:00:00Z`);
  return !Number.isNaN(date.getTime())&&date.toISOString().slice(0,10)===value;
 };
+const logoTypes=new Set(['image/png','image/jpeg','image/gif','image/webp']);
 function createSlug(value){
  const base=String(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()
   .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,75)||'entreprise';
  return `${base}-${randomBytes(5).toString('hex')}`;
 }
+
+router.get('/logos/:organizationId/:filename',async(req,res,next)=>{
+ const organizationId=String(req.params.organizationId),filename=String(req.params.filename);
+ if(!validId(organizationId)||!/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.(?:png|jpg|gif|webp)$/i.test(filename)){
+  return res.status(404).json({error:'Logo introuvable.'});
+ }
+ try{
+  const logoUrl=`/api/public/logos/${organizationId}/${filename}`;
+  const [rows]=await db.execute(
+   'SELECT logo_mime_type,logo_data FROM organization_settings WHERE organization_id=? AND logo_url=? LIMIT 1',
+   [organizationId,logoUrl]
+  );
+  if(!rows.length||!logoTypes.has(rows[0].logo_mime_type)||!Buffer.isBuffer(rows[0].logo_data))return res.status(404).json({error:'Logo introuvable.'});
+  res.set('Content-Type',rows[0].logo_mime_type).set('Cache-Control','public, max-age=3600').set('X-Content-Type-Options','nosniff').send(rows[0].logo_data);
+ }catch(error){next(error);}
+});
 
 router.get('/legal-documents',async(req,res,next)=>{
  try{

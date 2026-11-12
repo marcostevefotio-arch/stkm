@@ -1,14 +1,11 @@
 const r=require('express').Router();
 const db=require('../config/database');
 const QR=require('qrcode');
-const fs=require('fs/promises');
-const path=require('path');
 const {randomUUID}=require('crypto');
 const patientCode=require('../services/patient-code.service');
 const {hasFeature}=require('../middleware/plan-access');
 
 const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const logoDirectory=path.join(__dirname,'../../public/uploads/logos');
 const backupTables=[
  {name:'organization_settings',sql:'SELECT * FROM organization_settings WHERE organization_id=?'},
  {name:'notifications',sql:'SELECT * FROM notifications WHERE organization_id=?'},
@@ -309,7 +306,6 @@ r.put('/company',async(req,res,next)=>{
 });
 
 r.post('/logo',async(req,res,next)=>{
- let savedPath;
  try{
   if(!isAdministrator(req))return res.status(403).json({error:'Seuls les propriétaires et administrateurs peuvent modifier le logo.'});
   const match=typeof req.body?.data_url==='string'&&req.body.data_url.match(/^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})$/);
@@ -317,23 +313,14 @@ r.post('/logo',async(req,res,next)=>{
   const mime=match[1],image=Buffer.from(match[2],'base64'),type=logoTypes[mime];
   if(!image.length||image.length>2*1024*1024)return res.status(400).json({error:'Le logo doit peser au maximum 2 Mo.'});
   if(!type.matches(image))return res.status(400).json({error:'Le contenu du fichier ne correspond pas à son format d’image.'});
-  await fs.mkdir(logoDirectory,{recursive:true});
-  const filename=`organization-${req.tenantId}-${randomUUID()}.${type.extension}`;
-  savedPath=path.join(logoDirectory,filename);
-  await fs.writeFile(savedPath,image,{flag:'wx'});
-  const logoUrl=`/uploads/logos/${filename}`;
+  const logoUrl=`/api/public/logos/${req.tenantId}/${randomUUID()}.${type.extension}`;
   await db.execute(
-   'INSERT INTO organization_settings(organization_id,logo_url) VALUES(?,?) ON DUPLICATE KEY UPDATE logo_url=VALUES(logo_url)',
-   [req.tenantId,logoUrl]
+   `INSERT INTO organization_settings(organization_id,logo_url,logo_mime_type,logo_data) VALUES(?,?,?,?)
+    ON DUPLICATE KEY UPDATE logo_url=VALUES(logo_url),logo_mime_type=VALUES(logo_mime_type),logo_data=VALUES(logo_data)`,
+   [req.tenantId,logoUrl,mime,image]
   );
   res.json({message:'Logo enregistré.',logo_url:logoUrl});
- }catch(error){
-  if(savedPath){
-   try{await fs.unlink(savedPath);}
-   catch(cleanupError){console.error('Impossible de supprimer le fichier logo temporaire.',cleanupError);}
-  }
-  next(error);
- }
+ }catch(error){next(error);}
 });
 
 r.put('/',async(req,res,next)=>{

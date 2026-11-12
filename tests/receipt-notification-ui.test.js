@@ -24,12 +24,12 @@ test('direct settings role-merger links render the actual configuration tab',()=
 
 test('receipt identity uses the company and safe logo, with an actually decodable invoice barcode',()=>{
  const content={prepend:element=>{content.identity=element;},append:element=>{content.barcode=element;}};
- let encoded;
+ let encoded,barcodeOptions;
  const context={
   state:{settings:{company_name:'Company & Sons',display_name:'Branch',company_address:'Address',company_phone:'123',logo_url:'/uploads/logos/test.png'},profile:{organization_name:'Fallback'}},
   safeLogoUrl:value=>value,esc:value=>String(value).replace(/&/g,'&amp;'),
   document:{createElement:()=>({}),createElementNS:()=>({classList:{add:()=>{}},setAttribute:()=>{}})},
-  window:{JsBarcode:(target,value,options)=>{encoded={};JsBarcode(encoded,value,options);}}
+  window:{JsBarcode:(target,value,options)=>{barcodeOptions=options;encoded={};JsBarcode(encoded,value,options);}}
  };
  vm.createContext(context);
  vm.runInContext(source.slice(source.indexOf('    function addReceiptIdentity('),source.indexOf('    async function paymentForm(')),context);
@@ -37,14 +37,25 @@ test('receipt identity uses the company and safe logo, with an actually decodabl
  context.addReceiptIdentity(content,number);
  assert.match(content.identity.innerHTML,/Company &amp; Sons/);
  assert.match(content.identity.innerHTML,/uploads\/logos\/test.png/);
- assert.match(content.identity.innerHTML,/Address/);
+ assert.match(content.identity.innerHTML,/Company &amp; Sons<\/h2><p>Address<\/p>/);
  assert.ok(content.barcode);
+ assert.equal(barcodeOptions.width,1.5);
+ assert.equal(barcodeOptions.height,40);
  const bits='0'.repeat(12)+encoded.encodings.map(encoding=>encoding.data).join('')+'0'.repeat(12);
  const row=new BitArray(bits.length);
  for(let index=0;index<bits.length;index++)if(bits[index]==='1')row.set(index);
  assert.equal(new Code128Reader().decodeRow(0,row).getText(),number);
  context.window.JsBarcode=null;
  assert.throws(()=>context.addReceiptIdentity(content,number),/indisponible/);
+});
+
+test('receipt print layout removes preceding app content and fits receipt metadata on one row',()=>{
+ const styles=fs.readFileSync(path.join(__dirname,'../public/css/layout.css'),'utf8');
+ const printStyles=styles.slice(styles.indexOf('body.receipt-printing .shell'),styles.indexOf('.search-group{'));
+ assert.match(printStyles,/body\.receipt-printing \.shell,body\.receipt-printing #toast\{display:none!important\}/);
+ assert.match(printStyles,/\.receipt-meta\{display:flex/);
+ assert.match(printStyles,/margin:15mm 20mm!important/);
+ assert.doesNotMatch(printStyles,/@page receipt-page/);
 });
 
 test('notification sound beeps once per new notification, not historical pages or read updates',async()=>{
