@@ -54,7 +54,7 @@ test('receipt print layout removes preceding app content and fits receipt metada
  const printStyles=styles.slice(styles.indexOf('body.receipt-printing .shell'),styles.indexOf('.search-group{'));
  assert.match(printStyles,/body\.receipt-printing \.shell,body\.receipt-printing #toast\{display:none!important\}/);
  assert.match(printStyles,/\.receipt-meta\{display:flex/);
- assert.match(printStyles,/margin:15mm 20mm!important/);
+ assert.match(printStyles,/margin:15mm 7\.5mm!important/);
  assert.doesNotMatch(printStyles,/@page receipt-page/);
 });
 
