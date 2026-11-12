@@ -1844,10 +1844,11 @@
                 };
             }
             mountDataTable(pendingPanel.querySelector('[data-pending-sales]'), {
-                rows: pending.slice(0, 100).map(item => ({ ...item, searchText: [item.invoice_number, item.patient_name, item.seller_name, item.status].join(' ') })),
+                rows: pending.slice(0, 100).map(item => ({ ...item, searchText: [item.invoice_number, item.patient_name, item.seller_name, item.status, ...(Array.isArray(item.items) ? item.items.map(product => product.product_name) : [])].join(' ') })),
                 searchText: 'Rechercher par facture, client ou vendeur…',
                 columns: [
                     { label: 'Facture', render: item => `<b>${esc(item.invoice_number)}</b><small>${esc(new Date(item.created_at).toLocaleString('fr-FR'))}</small>` },
+                    { label: 'Produits à encaisser', render: item => (Array.isArray(item.items) ? item.items : []).map(product => `<div>${esc(product.product_name)}<small>${esc(Number(product.quantity).toLocaleString('fr-FR'))} ${esc(product.unit)}</small></div>`).join('') || '—' },
                     { label: 'Client', render: item => esc(item.patient_name || 'Client non enregistré') },
                     { label: 'Vendeur', render: item => esc(item.seller_name) },
                     { label: 'Statut', render: item => esc(invoiceStatusLabels[item.status] || item.status) },

@@ -299,6 +299,8 @@ router.get('/pending',requireFeatureCash,requireCashAccess,async(req,res,next)=>
  try{
   const [rows]=await db.execute(
    `SELECT i.id,i.invoice_number,i.patient_name,i.total_amount,i.status,i.created_at,u.full_name seller_name,
+    (SELECT JSON_ARRAYAGG(JSON_OBJECT('product_name',si.product_name,'quantity',si.quantity,'unit',si.unit))
+     FROM sales_invoice_items si WHERE si.invoice_id=i.id) items,
     COALESCE((SELECT SUM(p.amount) FROM sales_payments p WHERE p.invoice_id=i.id),0) paid_amount,
     COALESCE((SELECT SUM(r.refund_amount) FROM sales_returns r WHERE r.invoice_id=i.id),0) refunded_amount,
     COALESCE((SELECT SUM(ri.refund_amount) FROM sales_return_items ri JOIN sales_returns sr ON sr.id=ri.return_id WHERE sr.invoice_id=i.id),0) returned_value

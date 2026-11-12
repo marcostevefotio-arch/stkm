@@ -496,10 +496,18 @@
                             <label><input type="checkbox" name="show_authenticated_links"${settings.show_authenticated_links ? ' checked' : ''}> Afficher un accès aux documents dans les paramètres après connexion</label>
                             <p class="sp-muted">Le consentement aux documents lors de l’inscription reste obligatoire. La désactivation masque les liens de navigation publics et/ou l’onglet dans l’espace abonné; les pages directes restent accessibles.</p>
                         </div>
-                        ${settings.documents.map(document => `<div class="sp-panel"><h3>${esc(document.title)}</h3><p class="sp-muted">Version ${esc(document.version.slice(0, 12))} · Utilisez « # » en début de ligne pour créer un titre de section. Le contenu est du texte brut, jamais du HTML.</p><label>Titre<input name="title_${esc(document.id)}" maxlength="180" minlength="2" value="${esc(document.title)}" required></label><label>Contenu<textarea name="content_${esc(document.id)}" maxlength="60000" minlength="20" rows="16" required>${esc(document.content)}</textarea></label></div>`).join('')}
-                        <p class="sp-error" role="alert"></p><button class="sp-btn">Enregistrer les documents et options</button>
+                        ${settings.documents.map(document => `<div class="sp-panel"><div class="sp-toolbar"><h3>${esc(document.title)}</h3><span class="grow"></span><button type="button" class="sp-btn secondary" data-legal-preview="${esc(document.id)}">Aperçu</button></div><p class="sp-muted">Version ${esc(document.version.slice(0, 12))} · Utilisez « # » en début de ligne pour créer un titre de section. Le contenu est du texte brut, jamais du HTML.</p><label>Titre<input name="title_${esc(document.id)}" maxlength="180" minlength="2" value="${esc(document.title)}" required></label><label>Contenu<textarea name="content_${esc(document.id)}" maxlength="60000" minlength="20" rows="16" required>${esc(document.content)}</textarea></label></div>`).join('')}
+                        <p class="sp-error" role="alert"></p><button type="submit" class="sp-btn">Enregistrer les documents et options</button>
                     </form>`;
                     const form=panel.querySelector('[data-legal-form]');
+                    form.querySelectorAll('[data-legal-preview]').forEach(button => {
+                        button.onclick = () => {
+                            const id = button.dataset.legalPreview;
+                            const preview = modal(form.elements[`title_${id}`].value.trim(), '<p class="sp-muted">Aperçu des modifications en cours, non enregistrées par cette action.</p><article class="sp-legal-preview"></article>');
+                            window.renderLegalDocumentContent(preview.body.querySelector('.sp-legal-preview'), form.elements[`content_${id}`].value.trim());
+                            preview.overlay.querySelector('.sp-close').focus();
+                        };
+                    });
                     form.onsubmit=event=>{
                         event.preventDefault();
                         const body={
@@ -511,7 +519,7 @@
                                 content:form.elements[`content_${document.id}`].value
                             }))
                         };
-                        run(form.querySelector('button'),async()=>{
+                        run(form.querySelector('button[type="submit"]'),async()=>{
                             await send('PUT','/admin/legal-documents',body);
                             toast('Documents et options d’affichage enregistrés.');
                             await load('legal');

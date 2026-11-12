@@ -80,14 +80,21 @@ test('separated payment requires another user and a cash subscription before cas
 
 test('cash queue uses tenant and current seller filters and requires cash feature',async t=>{
  const original=db.execute,calls=[];
- db.execute=async(sql,values)=>{calls.push({sql,values});return [[]];};
+ db.execute=async(sql,values)=>{
+  calls.push({sql,values});
+  if(sql.includes('FROM sales_invoices i'))return [[{id:15,items:[{product_name:'Produit test',quantity:'2.000',unit:'boîte'}]}]];
+  return [[]];
+ };
  t.after(()=>{db.execute=original;});
  const base=await setup(t,'CASHIER',7,'["sales","cash"]');
  const response=await fetch(`${base}/sales/pending`);
  assert.equal(response.status,200);
+ const pending=await response.json();
+ assert.deepEqual(pending[0].items,[{product_name:'Produit test',quantity:'2.000',unit:'boîte'}]);
  assert.deepEqual(calls[0].values,[42,7,0]);
  assert.match(calls[0].sql,/i\.created_by<>\?/);
  assert.match(calls[0].sql,/i\.separate_cashier=1/);
+ assert.match(calls[0].sql,/JSON_ARRAYAGG\(JSON_OBJECT\('product_name',si\.product_name,'quantity',si\.quantity,'unit',si\.unit\)\)/);
  const noCash=await setup(t,'CASHIER',7,'["sales"]');
  assert.equal((await fetch(`${noCash}/sales/pending`)).status,403);
  assert.equal(calls.length,1);

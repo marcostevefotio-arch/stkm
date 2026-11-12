@@ -24,6 +24,8 @@ Compte de démonstration de l’établissement : `admin@demo.redams-stk.local` (
 
 ## Accéder à l’espace de gestion des organisations et abonnements (Super Admin)
 
+Dans le portail `/portal`, les administrateurs SaaS peuvent gérer les trois documents légaux depuis **Administration commerciale > Documents légaux** : modifier les titres et contenus, régler la visibilité des liens publics et après connexion, puis enregistrer. Chaque document dispose d'un bouton **Aperçu** qui affiche les valeurs actuellement saisies, même avant enregistrement, sans les publier. Les titres de section (`# `) et les listes (`- `) utilisent le même rendu que les pages publiques ; le HTML reste du texte, sans être exécuté.
+
 **Important :** l'administration de la plateforme (organisations, abonnements, factures, assistance, tarifs, promotions, partenaires, FAQ, formations, base de données, équipe) est désormais **uniquement** dans le portail employé (`/portal`), réservée au rôle `PLATFORM_ADMIN`. L'ancienne section `/app#platform` n'est plus proposée et les routes `/api/platform` répondent `410`. Créez les comptes du portail avec `scripts/create-portal-staff.js`. Procédure historique (comptes `SUPER_ADMIN`, sans effet sur l'administration) :
 
 1. Démarrez MySQL et l’application, puis trouvez l’identifiant d’un établissement actif. Après le seed, vous pouvez exécuter :

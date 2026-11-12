@@ -49,6 +49,10 @@ tr.clickable{cursor:pointer}tr.clickable:hover{background:#f7fafc}
 .sp-overlay{position:fixed;inset:0;background:#0a1d2ccc;display:grid;place-items:center;padding:16px;z-index:50}
 .sp-modal{position:relative;background:#fff;border-radius:14px;padding:24px;width:min(720px,100%);max-height:92vh;overflow:auto}
 .sp-modal.narrow{width:min(460px,100%)}
+.sp-legal-preview{line-height:1.8;overflow-wrap:anywhere}
+.sp-legal-preview h2{margin:24px 0 10px;font-size:17px}
+.sp-legal-preview p{white-space:pre-line}
+.sp-legal-preview ul{padding-left:22px}
 .sp-modal h3{font:700 18px Montserrat;margin:0 0 16px;padding-right:30px}
 .sp-close{position:absolute;right:14px;top:10px;background:none;border:0;font-size:26px;color:var(--sp-muted);cursor:pointer}
 .sp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}

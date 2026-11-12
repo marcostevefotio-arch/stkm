@@ -41,6 +41,16 @@ test('public portal, signup, login and application routes serve their pages', as
   const legalScript = await fetch(`${baseUrl}/js/legal-documents.js`);
   assert.equal(legalScript.status, 200);
   assert.match(legalScript.headers.get('content-type'), /javascript/);
+  const rendererScript = await fetch(`${baseUrl}/js/legal-document-renderer.js`);
+  assert.equal(rendererScript.status, 200);
+  assert.match(await rendererScript.text(), /window\.renderLegalDocumentContent/);
+  const staffResponse = await fetch(`${baseUrl}/portal`);
+  assert.equal(staffResponse.status, 200);
+  const staffHtml = await staffResponse.text();
+  assert.match(staffHtml, /legal-document-renderer\.js" defer><\/script>\s*<script src="\/js\/staff\.js/);
+  for (const html of [rootHtml, signupHtml]) {
+    assert.match(html, /legal-document-renderer\.js" defer><\/script>\s*<script src="\/js\/legal-documents\.js/);
+  }
   for (const [route, heading] of [
     ['/conditions-generales', /Conditions générales/],
     ['/politique-confidentialite', /Politique de Confidentialité/],
@@ -48,7 +58,9 @@ test('public portal, signup, login and application routes serve their pages', as
   ]) {
     const legalResponse = await fetch(`${baseUrl}${route}`);
     assert.equal(legalResponse.status, 200);
-    assert.match(await legalResponse.text(), heading);
+    const legalHtml = await legalResponse.text();
+    assert.match(legalHtml, heading);
+    assert.match(legalHtml, /legal-document-renderer\.js" defer><\/script>\s*<script src="\/js\/legal-documents\.js/);
   }
   const portalScript = await fetch(`${baseUrl}/js/portal.js`);
   assert.equal(portalScript.status, 200);
