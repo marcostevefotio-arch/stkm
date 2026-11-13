@@ -1702,18 +1702,38 @@
             const closeReceipt = () => { if (prescriptionUrl) URL.revokeObjectURL(prescriptionUrl); modal.remove(); };
             modal.querySelector('.close').onclick = closeReceipt; modal.addEventListener('click', event => { if (event.target === modal) closeReceipt(); });
             modal.querySelector('[data-view-prescription]')?.addEventListener('click', async () => { try { const image = await api(`/api/sales/${encodeURIComponent(invoice.id)}/prescription`); if (prescriptionUrl) URL.revokeObjectURL(prescriptionUrl); prescriptionUrl = URL.createObjectURL(image); const preview = document.createElement('img'); preview.src = prescriptionUrl; preview.alt = 'Ordonnance jointe à la facture'; modal.querySelector('[data-prescription-preview]').replaceChildren(preview); } catch (error) { toast(error.message); } });
-            modal.querySelector('[data-print]').onclick = async () => {
-                try {
-                    const logo = modal.querySelector('.receipt-identity img');
-                    if (logo) await logo.decode();
-                    document.body.classList.add('receipt-printing');
-                    window.addEventListener('afterprint', () => document.body.classList.remove('receipt-printing'), { once: true }); window.print();
-                } catch (error) { toast('Impression impossible : le logo de l’entreprise ne peut pas être chargé. Vérifiez le logo dans les paramètres.', 'error'); }
-            };
+            const printButton = modal.querySelector('[data-print]');
+            const printControls = document.createElement('div');
+            printControls.className = 'receipt-print-controls';
+            printControls.innerHTML = '<label>Orientation<select data-print-orientation><option value="portrait">Portrait</option><option value="landscape">Paysage</option></select></label>';
+            printButton.before(printControls);
+            printControls.append(printButton);
+            printButton.onclick = () => printReceipt(modal);
             modal.querySelector('[data-pay-balance]')?.addEventListener('click', () => { closeReceipt(); paymentForm(root, invoice, balance); });
             modal.querySelector('[data-return-items]')?.addEventListener('click', () => { closeReceipt(); returnForm(root, invoice); });
             modal.querySelector('[data-cancel-invoice]')?.addEventListener('click', async () => { const reason = prompt('Motif d’annulation (obligatoire) :'); if (reason === null) return; try { await api(`/api/sales/${encodeURIComponent(invoice.id)}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }); toast('Facture annulée, stock réintégré.'); closeReceipt(); await salesInvoices(root); } catch (error) { toast(error.message); } });
         } catch (error) { toast(error.message); }
+    }
+    async function printReceipt(modal) {
+        const pageStyle = document.createElement('style');
+        const cleanup = () => {
+            document.body.classList.remove('receipt-printing');
+            pageStyle.remove();
+            window.removeEventListener('afterprint', cleanup);
+        };
+        try {
+            const logo = modal.querySelector('.receipt-identity img');
+            if (logo) await logo.decode();
+            const orientation = modal.querySelector('[data-print-orientation]').value === 'landscape' ? 'landscape' : 'portrait';
+            pageStyle.textContent = `@media print { @page { size: A4 ${orientation}; margin: 0 5mm 15mm; } }`;
+            document.head.append(pageStyle);
+            document.body.classList.add('receipt-printing');
+            window.addEventListener('afterprint', cleanup, { once: true });
+            window.print();
+        } catch (error) {
+            cleanup();
+            toast(`Impression impossible : ${error.message}`, 'error');
+        }
     }
     function addReceiptIdentity(content, invoiceNumber) {
         if (!window.JsBarcode) throw Error('Le générateur de codes-barres est indisponible. Rechargez la page puis réessayez.');

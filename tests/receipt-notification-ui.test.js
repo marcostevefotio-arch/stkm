@@ -54,8 +54,39 @@ test('receipt print layout removes preceding app content and fits receipt metada
  const printStyles=styles.slice(styles.indexOf('body.receipt-printing .shell'),styles.indexOf('.search-group{'));
  assert.match(printStyles,/body\.receipt-printing \.shell,body\.receipt-printing #toast\{display:none!important\}/);
  assert.match(printStyles,/\.receipt-meta\{display:flex/);
- assert.match(printStyles,/margin:15mm 7\.5mm!important/);
+ assert.match(printStyles,/\.modal\{[^}]*margin:0!important/);
+ assert.match(printStyles,/\.receipt-print-controls[^}]*display:none!important/);
  assert.doesNotMatch(printStyles,/@page receipt-page/);
+});
+
+test('receipt printing applies the chosen orientation and exact margins, then restores page settings',async()=>{
+ for(const orientation of ['portrait','landscape']){
+  const listeners={},classes=new Set(),styles=[],errors=[];
+  let printed=0;
+  const context={
+   document:{
+    createElement:()=>({remove(){this.removed=true;}}),
+    head:{append:style=>styles.push(style)},
+    body:{classList:{add:name=>classes.add(name),remove:name=>classes.delete(name)}}
+   },
+   window:{
+    addEventListener:(name,callback)=>{listeners[name]=callback;},
+    removeEventListener:name=>{delete listeners[name];},
+    print:()=>{printed++;}
+   },
+   toast:message=>errors.push(message)
+  };
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('    async function printReceipt('),source.indexOf('    function addReceiptIdentity(')),context);
+  await context.printReceipt({querySelector:selector=>selector==='[data-print-orientation]'?{value:orientation}:null});
+  assert.equal(printed,1);
+  assert.equal(styles[0].textContent,`@media print { @page { size: A4 ${orientation}; margin: 0 5mm 15mm; } }`);
+  assert.ok(classes.has('receipt-printing'));
+  listeners.afterprint();
+  assert.ok(styles[0].removed);
+  assert.equal(classes.size,0);
+  assert.equal(errors.length,0);
+ }
 });
 
 test('notification sound beeps once per new notification, not historical pages or read updates',async()=>{

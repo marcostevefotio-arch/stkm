@@ -138,6 +138,8 @@
 .review-flags p{margin:7px 0}
 .review-flags small{color:var(--muted)}
 .receipt-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.receipt-print-controls{display:flex;align-items:center;gap:8px}
+.receipt-print-controls label{margin:0}
 .receipt-identity{display:flex;align-items:center;gap:16px;margin-bottom:16px;break-inside:avoid}
 .receipt-identity img{width:72px;height:72px;object-fit:contain}
 .receipt-identity h2,.receipt-identity p{margin:4px 0}
@@ -150,7 +152,7 @@
  body.receipt-printing *{visibility:hidden!important}
  body.receipt-printing #receipt-modal,body.receipt-printing #receipt-modal *{visibility:visible!important}
  body.receipt-printing #receipt-modal{position:static!important;display:block!important;padding:0!important;background:white!important}
- body.receipt-printing #receipt-modal .modal{width:auto!important;max-height:none!important;overflow:visible!important;margin:15mm 7.5mm!important;padding:0!important;border:0!important;box-shadow:none!important}
+ body.receipt-printing #receipt-modal .modal{width:auto!important;max-height:none!important;overflow:visible!important;margin:0!important;padding:0!important;border:0!important;box-shadow:none!important}
  body.receipt-printing #receipt-modal .receipt-identity{gap:10px;margin-bottom:7px}
  body.receipt-printing #receipt-modal .receipt-identity img{width:42px;height:42px}
  body.receipt-printing #receipt-modal .receipt-identity h2,body.receipt-printing #receipt-modal .receipt-identity p{margin:2px 0}
@@ -166,7 +168,7 @@
  body.receipt-printing #receipt-modal h4{margin:8px 0 4px}
  body.receipt-printing #receipt-modal .tag{padding:2px 5px}
  body.receipt-printing #receipt-modal .receipt-barcode{width:75%;max-width:220px;margin:8px auto 0}
- body.receipt-printing #receipt-modal .close,body.receipt-printing #receipt-modal [data-print],body.receipt-printing #receipt-modal .receipt-actions{display:none!important}
+ body.receipt-printing #receipt-modal .close,body.receipt-printing #receipt-modal [data-print],body.receipt-printing #receipt-modal .receipt-print-controls,body.receipt-printing #receipt-modal .receipt-actions{display:none!important}
 }
 .search-group{margin-top:12px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .search-group>summary{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:#f7faf8;color:var(--ink);font-weight:700}
