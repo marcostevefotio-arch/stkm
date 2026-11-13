@@ -14,7 +14,7 @@ const { getSubscriptionReceipt } = require('../src/services/subscription-receipt
 process.env.JWT_SECRET = 'subscription-management-test';
 const app = require('../src/app');
 const cashBody = { plan_id:2,billing_interval:'monthly',period_start:'2026-11-12',period_end:'2026-12-12',amount:'25000',max_users:5,confirm:true };
-const modules = ['stock','procurement','sales','cash'];
+const modules = ['stock','stock_movements','procurement','sales','cash'];
 
 async function serve(t, target) {
     const server = target.listen(0);
@@ -220,7 +220,8 @@ test('optional patients reset removes linked coverages before patients and insur
 
 test('each trial reset module can be selected independently without deleting the others', async () => {
     const expected = {
-        stock:['stock_movement_corrections','stock_movements','products'],
+        stock:['products'],
+        stock_movements:['stock_movement_corrections','stock_movements'],
         procurement:['purchase_order_items','purchase_orders','suppliers'],
         sales:['sales_return_items','sales_returns','sales_payments','sales_invoice_prescriptions','sales_invoice_items','sales_invoices'],
         cash:['cash_movements','cash_sessions'],
@@ -243,8 +244,23 @@ test('remaining child references block a parent reset before backup or deletion'
     }
 });
 
+test('catalogue reset requires selecting referenced stock movements but movements can be reset while keeping products', async () => {
+    const blocked = resetFixture({ referenced:true });
+    await assert.rejects(resetTrialData({ ...resetOptions(blocked),modules:['stock'] }),/Mouvements de stock a des références de Catalogue produits/);
+    assert.equal(blocked.state.backups,0);
+    assert.equal(blocked.events.some(event => event.sql.startsWith('DELETE')),false);
+
+    const allowed = resetFixture({ referenced:true });
+    const result = await resetTrialData({ ...resetOptions(allowed),modules:['stock_movements'] });
+    assert.deepEqual(result.modules,['stock_movements']);
+    assert.deepEqual(Object.keys(result.deleted),['stock_movement_corrections','stock_movements']);
+    assert.equal(allowed.events.some(event => /(?:DELETE FROM|UPDATE) products/.test(event.sql)),false);
+    assert.ok(allowed.state.committed);
+});
+
 test('reference notes name the module parents instead of requiring every module to be reset', () => {
     assert.deepEqual(RESET_MODULES.find(module => module.key === 'stock').dependencies,[]);
+    assert.deepEqual(RESET_MODULES.find(module => module.key === 'stock_movements').dependencies,['stock']);
     assert.deepEqual(RESET_MODULES.find(module => module.key === 'procurement').dependencies,['stock']);
     assert.deepEqual(RESET_MODULES.find(module => module.key === 'sales').dependencies,['stock','patients']);
     assert.deepEqual(RESET_MODULES.find(module => module.key === 'cash').dependencies,['sales']);

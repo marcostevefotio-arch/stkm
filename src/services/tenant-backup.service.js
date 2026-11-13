@@ -8,7 +8,8 @@ const compress = promisify(gzip),decompress = promisify(gunzip);
 const RETENTION_DAYS = 365;
 const MAX_BYTES = 128 * 1024 * 1024;
 const BACKUP_MODULES = [
-    { key:'stock',label:'Stock et catalogue',tables:['products','stock_movements','stock_movement_corrections'] },
+    { key:'stock',label:'Catalogue produits',tables:['products'] },
+    { key:'stock_movements',label:'Mouvements de stock',tables:['stock_movements','stock_movement_corrections'] },
     { key:'procurement',label:'Approvisionnement',tables:['suppliers','purchase_orders','purchase_order_items'] },
     { key:'sales',label:'Ventes et facturation',tables:['sales_invoices','sales_invoice_prescriptions','sales_invoice_items','sales_payments','sales_returns','sales_return_items'] },
     { key:'cash',label:'Recettes et caisse',tables:['cash_sessions','cash_movements'] },

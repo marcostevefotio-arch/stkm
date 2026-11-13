@@ -2,7 +2,8 @@ const db = require('../config/database');
 const { saveSnapshot } = require('./tenant-backup.service');
 
 const RESET_MODULES = [
-    { key:'stock', label:'Stock et catalogue', dependencies:[] },
+    { key:'stock', label:'Catalogue produits', dependencies:[] },
+    { key:'stock_movements', label:'Mouvements de stock', dependencies:['stock'] },
     { key:'procurement', label:'Approvisionnement et fournisseurs', dependencies:['stock'] },
     { key:'sales', label:'Ventes, factures et ordonnances', dependencies:['stock','patients'] },
     { key:'cash', label:'Caisse et mouvements', dependencies:['sales'] },
@@ -10,6 +11,7 @@ const RESET_MODULES = [
 ];
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 const REFERENCES = [
+    { parent:'stock',child:'stock_movements',sql:'SELECT 1 FROM stock_movements WHERE organization_id=? LIMIT 1' },
     { parent:'stock',child:'procurement',sql:'SELECT 1 FROM purchase_order_items item JOIN purchase_orders p ON p.id=item.purchase_order_id WHERE p.organization_id=? LIMIT 1' },
     { parent:'stock',child:'sales',sql:'SELECT 1 FROM sales_invoice_items item JOIN sales_invoices i ON i.id=item.invoice_id WHERE i.organization_id=? LIMIT 1' },
     { parent:'patients',child:'sales',sql:`SELECT 1 FROM sales_invoices i WHERE i.organization_id=? AND
@@ -70,9 +72,11 @@ async function resetTrialData({ organizationId,staffId,modules,confirmation,conn
             await remove('purchase_orders','DELETE FROM purchase_orders WHERE organization_id=?');
             await remove('suppliers','DELETE FROM suppliers WHERE organization_id=?');
         }
-        if (modules.includes('stock')) {
+        if (modules.includes('stock_movements')) {
             await remove('stock_movement_corrections','DELETE FROM stock_movement_corrections WHERE organization_id=?');
             await remove('stock_movements','DELETE FROM stock_movements WHERE organization_id=?');
+        }
+        if (modules.includes('stock')) {
             await remove('products','DELETE FROM products WHERE organization_id=?');
         }
         if (modules.includes('patients')) {

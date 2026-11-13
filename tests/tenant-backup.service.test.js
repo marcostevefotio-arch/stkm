@@ -234,6 +234,11 @@ test('backup listings are tenant-scoped, paginated and never expose passwords or
     assert.equal(result.status.last_error,'Previous failure'); assert.equal(result.modules.find(module => module.key === 'accounting').protected,true);
 });
 
+test('backup restore separates product catalogue from stock movements without changing saved table names', () => {
+    assert.deepEqual(BACKUP_MODULES.find(module => module.key === 'stock').tables,['products']);
+    assert.deepEqual(BACKUP_MODULES.find(module => module.key === 'stock_movements').tables,['stock_movements','stock_movement_corrections']);
+});
+
 test('trial reset UI checks every module by default, shows parent notes and submits only checked modules', async () => {
     const source = fs.readFileSync(path.join(__dirname,'../public/js/staff.js'),'utf8');
     let selected = ['cash'], body, html;
@@ -251,8 +256,9 @@ test('trial reset UI checks every module by default, shows parent notes and subm
     vm.createContext(context);
     vm.runInContext(source.slice(source.indexOf('    async function trialResetForm('),source.indexOf('    async function clientOptions(')),context);
     await context.trialResetForm('9','Client',() => {});
-    assert.equal((html.match(/name="modules"[^>]+checked/g) || []).length,5);
-    assert.ok(html.includes('a des reference de Stock et catalogue, Patients et assurances'));
+    assert.equal((html.match(/name="modules"[^>]+checked/g) || []).length,6);
+    assert.ok(html.includes('a des reference de Catalogue produits, Patients et assurances'));
+    assert.ok(html.includes('value="stock_movements" checked>Mouvements de stock'));
     assert.ok(html.includes('a des reference de Ventes, factures et ordonnances'));
     await form.onsubmit({ preventDefault(){} });
     await new Promise(resolve => setImmediate(resolve));
