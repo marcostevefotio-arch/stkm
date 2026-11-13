@@ -6,7 +6,10 @@ const db = require('../config/database');
 const { getUsage } = require('../services/tenant-usage.service');
 const { DEFAULT_PROGRAM, getProgram, recordPaidInvoiceCommission } = require('../services/partner-commission.service');
 const databaseUpgrade = require('../services/database-upgrade.service');
-const { MODULES, MODULE_KEYS } = require('../config/pricing');
+const { MODULES, MODULE_KEYS, INTERVALS, getPlanModules } = require('../config/pricing');
+const { resetTrialData, RESET_MODULES } = require('../services/trial-reset.service');
+const { getSubscriptionReceipt } = require('../services/subscription-receipt.service');
+const tenantBackups = require('../services/tenant-backup.service');
 const { DOCUMENTS: LEGAL_DOCUMENTS, loadLegalSettings, normalizeLegalSettings } = require('../config/legal-documents');
 const { STAFF_ROLES, canWrite, portalSecret, generateApiToken, validateShifts, isOnDuty, normalizeTime } = require('../config/portal-access');
 
@@ -213,7 +216,7 @@ router.get('/clients/:id', async (req, res, next) => {
         const [[users]] = await db.execute("SELECT COUNT(*) total FROM users WHERE organization_id=? AND is_active=TRUE AND role<>'SUPER_ADMIN'", [req.params.id]);
         const [tickets] = await db.execute('SELECT id,subject,status,created_at FROM support_tickets WHERE organization_id=? ORDER BY id DESC LIMIT 5', [req.params.id]);
         const [claims] = await db.execute('SELECT id,reference,subject,status,priority,created_at FROM platform_claims WHERE organization_id=? ORDER BY id DESC LIMIT 5', [req.params.id]);
-        const [invoices] = await db.execute('SELECT id,invoice_number,total_amount,currency,status,due_date FROM platform_invoices WHERE organization_id=? ORDER BY id DESC LIMIT 5', [req.params.id]);
+        const [invoices] = await db.execute("SELECT i.id,i.invoice_number,i.total_amount,i.currency,i.status,i.due_date,EXISTS(SELECT 1 FROM subscription_payments sp WHERE sp.subscription_id=i.subscription_id AND sp.provider_reference=i.invoice_number AND sp.payment_status='paid') has_receipt FROM platform_invoices i WHERE i.organization_id=? ORDER BY i.id DESC LIMIT 5", [req.params.id]);
         res.json({ organization: orgs[0], subscription: subscriptions[0] || null, contacts: owners, active_users: Number(users.total), tickets, claims, invoices });
     } catch (error) { next(error); }
 });
@@ -232,8 +235,8 @@ router.patch('/clients/:id/status', requireWrite('clients'), async (req, res, ne
 
 router.get('/plans', async (req, res, next) => {
     try {
-        const [rows] = await db.execute('SELECT id,code,name,plan_type,monthly_price,annual_price,biennial_price,currency FROM plans WHERE is_active=TRUE ORDER BY monthly_price,id');
-        res.json({ items: rows });
+        const [rows] = await db.execute('SELECT id,code,name,plan_type,monthly_price,annual_price,biennial_price,currency,max_users,included_modules,is_active FROM plans WHERE is_active=TRUE ORDER BY monthly_price,id');
+        res.json({ items: rows, modules:MODULES });
     } catch (error) { next(error); }
 });
 
@@ -672,6 +675,123 @@ router.patch('/clients/:id/subscription', requireWrite('clients'), async (req, r
     } catch (error) { next(error); }
 });
 
+router.post('/clients/:id/subscription/cash', requireAdmin, async (req, res, next) => {
+    const body = req.body || {}, amount = money(body.amount), maxUsers = Number(body.max_users);
+    if (!validId(req.params.id) || !validId(body.plan_id) || !INTERVALS.includes(body.billing_interval) ||
+        !validDate(body.period_start) || !validDate(body.period_end) || body.period_end <= body.period_start ||
+        !['number', 'string'].includes(typeof body.amount) || String(body.amount).trim() === '' || amount === null || amount <= 0 ||
+        !Number.isSafeInteger(maxUsers) || maxUsers < 1 || maxUsers > 10000 || body.confirm !== true) {
+        return res.status(400).json({ error: 'Confirmez le paiement en espèces et renseignez un forfait, une période, un montant positif et un nombre d’utilisateurs valides.' });
+    }
+    let connection;
+    try {
+        connection = await db.getConnection(); await connection.beginTransaction();
+        const [orgs] = await connection.execute('SELECT id,status,name,address FROM organizations WHERE id=? FOR UPDATE', [req.params.id]);
+        if (!orgs.length) throw Object.assign(new Error('Établissement introuvable.'), { status: 404 });
+        if (orgs[0].status !== 'active') throw Object.assign(new Error('Réactivez le compte avant d’activer son abonnement.'), { status: 409 });
+        const [plans] = await connection.execute('SELECT id,name,plan_type,currency,max_users,included_modules FROM plans WHERE id=? AND is_active=TRUE FOR UPDATE', [body.plan_id]);
+        if (!plans.length || plans[0].plan_type === 'trial') throw Object.assign(new Error('Choisissez un forfait payant actif.'), { status: 400 });
+        const plan = plans[0];
+        let modules = getPlanModules(plan);
+        if (plan.plan_type === 'customized') {
+            if (!Array.isArray(body.selected_modules) || !body.selected_modules.length ||
+                new Set(body.selected_modules).size !== body.selected_modules.length ||
+                body.selected_modules.some(module => !modules.includes(module))) {
+                throw Object.assign(new Error('Choisissez des modules valides pour le forfait personnalisé.'), { status: 400 });
+            }
+            modules = body.selected_modules;
+        }
+        const [[users]] = await connection.execute("SELECT COUNT(*) total FROM users WHERE organization_id=? AND is_active=TRUE AND role<>'SUPER_ADMIN'", [req.params.id]);
+        if (maxUsers < Number(users.total)) throw Object.assign(new Error('La limite doit couvrir les utilisateurs actifs du client.'), { status: 409 });
+        const [paid] = await connection.execute("SELECT id FROM platform_invoices WHERE organization_id=? AND status='paid' AND period_start=? AND period_end=? LIMIT 1 FOR UPDATE", [req.params.id,body.period_start,body.period_end]);
+        if (paid.length) throw Object.assign(new Error('Un paiement a déjà été enregistré pour cette période. Consultez son reçu.'), { status: 409 });
+        const [previous] = await connection.execute('SELECT id,status FROM subscriptions WHERE organization_id=? ORDER BY id DESC LIMIT 1 FOR UPDATE', [req.params.id]);
+        if (previous.length) await connection.execute("UPDATE subscriptions SET status='cancelled' WHERE organization_id=? AND status IN ('trialing','active','past_due','suspended')", [req.params.id]);
+        const [subscription] = await connection.execute(
+            `INSERT INTO subscriptions(organization_id,plan_id,status,billing_interval,contract_amount,max_users,selected_modules,current_period_start,current_period_end)
+             VALUES(?,?,'active',?,?,?,?,?,?)`,
+            [req.params.id,plan.id,body.billing_interval,amount,maxUsers,JSON.stringify(modules),body.period_start,body.period_end]
+        );
+        const number = `RED-${Date.now()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+        const notes = JSON.stringify({ subscription_receipt:{ version:1,plan_name:plan.name,organization_name:orgs[0].name,organization_address:orgs[0].address || null,recorded_by:req.staff.full_name,billing_interval:body.billing_interval } });
+        const [invoice] = await connection.execute(
+            `INSERT INTO platform_invoices(invoice_number,organization_id,subscription_id,period_start,period_end,subtotal,discount_amount,total_amount,currency,status,due_date,paid_at,notes,created_by,created_by_staff_id)
+             VALUES(?,?,?,?,?,?,0,?,?,'paid',?,NOW(),?,NULL,?)`,
+            [number,req.params.id,subscription.insertId,body.period_start,body.period_end,amount,amount,plan.currency,body.period_start,notes,req.staff.id]
+        );
+        await connection.execute(
+            "INSERT INTO subscription_payments(subscription_id,amount,currency,payment_status,provider,provider_reference,paid_at) VALUES(?,?,?,'paid','cash',?,NOW())",
+            [subscription.insertId,amount,plan.currency,number]
+        );
+        await recordPaidInvoiceCommission(connection, { id: invoice.insertId, organization_id: req.params.id, total_amount: amount, currency: plan.currency });
+        await connection.execute(
+            'INSERT INTO platform_audit_logs(staff_id,organization_id,action,entity_type,entity_id,details_json) VALUES(?,?,?,?,?,?)',
+            [req.staff.id,req.params.id,'SUBSCRIPTION_CASH_ACTIVATED','subscription',String(subscription.insertId),JSON.stringify({ invoice_id:invoice.insertId,invoice_number:number,amount,plan_id:plan.id,period_start:body.period_start,period_end:body.period_end })]
+        );
+        await connection.commit(); connection.release(); connection = null;
+        res.status(201).json({ id:subscription.insertId,invoice_id:invoice.insertId,invoice_number:number,message:'Paiement en espèces enregistré et abonnement activé.' });
+    } catch (error) {
+        if (connection) { try { await connection.rollback(); } finally { connection.release(); } }
+        if (error.status) return res.status(error.status).json({ error:error.message });
+        next(error);
+    }
+});
+
+router.get('/clients/:id/trial-reset', requireAdmin, async (req, res, next) => {
+    if (!validId(req.params.id)) return res.status(400).json({ error:'Établissement invalide.' });
+    try {
+        const [rows] = await db.execute("SELECT status,current_period_end>CURDATE() unexpired FROM subscriptions WHERE organization_id=? ORDER BY id DESC LIMIT 1", [req.params.id]);
+        res.json({ eligible:rows[0]?.status === 'trialing' && Boolean(rows[0].unexpired), modules:RESET_MODULES });
+    } catch (error) { next(error); }
+});
+
+router.get('/clients/:id/backups', requireAdmin, async (req, res, next) => {
+    if (!validId(req.params.id)) return res.status(400).json({ error:'Établissement invalide.' });
+    try { res.json(await tenantBackups.listTenantBackups(db,req.params.id,paging(req.query))); }
+    catch (error) { next(error); }
+});
+
+router.post('/clients/:id/backups', requireAdmin, async (req, res, next) => {
+    if (!validId(req.params.id)) return res.status(400).json({ error:'Établissement invalide.' });
+    try {
+        const backup = await tenantBackups.createTenantBackup({ organizationId:req.params.id,staffId:req.staff.id });
+        res.status(201).json({ backup,message:'Sauvegarde complète du client conservée en base.' });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error:error.message });
+        next(error);
+    }
+});
+
+router.post('/clients/:id/backups/:backupId/restore', requireAdmin, async (req, res, next) => {
+    if (!validId(req.params.id) || !validId(req.params.backupId)) return res.status(400).json({ error:'Identifiant invalide.' });
+    try {
+        res.json(await tenantBackups.mergeTenantBackup({ organizationId:req.params.id,backupId:req.params.backupId,modules:req.body?.modules,confirmation:req.body?.confirmation,staffId:req.staff.id }));
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error:error.message });
+        next(error);
+    }
+});
+
+router.post('/clients/:id/trial-reset', requireAdmin, async (req, res, next) => {
+    if (!validId(req.params.id)) return res.status(400).json({ error:'Établissement invalide.' });
+    try {
+        const result = await resetTrialData({ organizationId:req.params.id,staffId:req.staff.id,modules:req.body?.modules,confirmation:req.body?.confirmation });
+        res.json(result);
+    } catch (error) {
+        if (error.status || error.statusCode) return res.status(error.status || error.statusCode).json({ error:error.message });
+        next(error);
+    }
+});
+
+router.get('/invoices/:id/receipt', async (req, res, next) => {
+    if (!validId(req.params.id)) return res.status(400).json({ error:'Facture invalide.' });
+    try {
+        const receipt = await getSubscriptionReceipt(db, req.params.id);
+        if (!receipt) return res.status(404).json({ error:'Reçu de paiement enregistré introuvable.' });
+        res.json(receipt);
+    } catch (error) { next(error); }
+});
+
 router.get('/invoices', async (req, res, next) => {
     const { limit, offset } = paging(req.query), status = text(req.query.status, 10), clauses = [], values = [];
     if (status && !['draft', 'sent', 'paid', 'void'].includes(status)) return res.status(400).json({ error: 'Statut invalide.' });
@@ -681,7 +801,8 @@ router.get('/invoices', async (req, res, next) => {
     try {
         const [[count]] = await db.execute(`SELECT COUNT(*) total FROM platform_invoices i ${where}`, values);
         const [items] = await db.execute(
-            `SELECT i.id,i.invoice_number,i.organization_id,o.name organization_name,i.period_start,i.period_end,i.subtotal,i.discount_amount,i.total_amount,i.currency,i.status,i.due_date,i.paid_at,i.notes
+            `SELECT i.id,i.invoice_number,i.organization_id,o.name organization_name,DATE_FORMAT(i.period_start,'%Y-%m-%d') period_start,DATE_FORMAT(i.period_end,'%Y-%m-%d') period_end,i.subtotal,i.discount_amount,i.total_amount,i.currency,i.status,DATE_FORMAT(i.due_date,'%Y-%m-%d') due_date,i.paid_at,i.notes,
+                    EXISTS(SELECT 1 FROM subscription_payments sp WHERE sp.subscription_id=i.subscription_id AND sp.provider_reference=i.invoice_number AND sp.payment_status='paid') has_receipt
              FROM platform_invoices i JOIN organizations o ON o.id=i.organization_id ${where} ORDER BY i.id DESC LIMIT ? OFFSET ?`, [...values, limit, offset]);
         res.json({ items, total: Number(count.total), limit, offset });
     } catch (error) { next(error); }

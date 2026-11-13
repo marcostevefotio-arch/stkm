@@ -4,6 +4,8 @@ const QR=require('qrcode');
 const {randomUUID}=require('crypto');
 const patientCode=require('../services/patient-code.service');
 const {hasFeature}=require('../middleware/plan-access');
+const {normalizeBackup,restoreBackupValue,sameBackupRow}=require('../services/backup-format');
+const tenantBackups=require('../services/tenant-backup.service');
 
 const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const backupTables=[
@@ -61,35 +63,6 @@ const backupReferences={
  support_ticket_messages:{ticket_id:'support_tickets',user_id:'users'}
 };
 const isAdministrator=req=>['OWNER','ADMIN'].includes(req.user?.role);
-const normalizeBackup=value=>{
- if(Buffer.isBuffer(value))return {$binary:value.toString('base64')};
- if(value instanceof Date)return value.toISOString();
- if(Array.isArray(value))return value.map(normalizeBackup);
- if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,normalizeBackup(item)]));
- return value;
-};
-const restoreBackupValue=value=>{
- if(Array.isArray(value))return value.map(restoreBackupValue);
- if(value&&typeof value==='object'){
-  const keys=Object.keys(value);
-  if(keys.length===1&&keys[0]==='$binary'){
-   if(typeof value.$binary!=='string'||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.$binary))throw Object.assign(Error('Le fichier de sauvegarde contient une pièce binaire invalide.'),{status:400});
-   return Buffer.from(value.$binary,'base64');
-  }
-  return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,restoreBackupValue(item)]));
- }
- return value;
-};
-const canonicalValue=value=>{
- if(Buffer.isBuffer(value))return `binary:${value.toString('base64')}`;
- if(value instanceof Date)return value.toISOString();
- if(typeof value==='string'&&/^[\[{]/.test(value)){
-  try{return JSON.stringify(JSON.parse(value));}catch{}
- }
- if(value&&typeof value==='object')return JSON.stringify(value);
- return value;
-};
-const sameBackupRow=(left,right,columns)=>columns.every(column=>canonicalValue(left[column])===canonicalValue(right[column]));
 const logoTypes={
  'image/png':{extension:'png',matches:buffer=>buffer.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))},
  'image/jpeg':{extension:'jpg',matches:buffer=>buffer[0]===0xff&&buffer[1]===0xd8&&buffer[2]===0xff},
@@ -142,6 +115,30 @@ r.put('/role-merger',async(req,res,next)=>{
   res.json({message:'Fusion des rôles enregistrée. Les rôles d’origine sont conservés.',merge_pharmacist_storekeeper:enabled});
  }catch(error){if(connection)await connection.rollback();next(error);}
  finally{if(connection)connection.release();}
+});
+
+r.get('/backups',async(req,res,next)=>{
+ if(!isAdministrator(req))return res.status(403).json({error:'Permission insuffisante.'});
+ try{
+  const offset=Math.min(Math.max(Number.parseInt(req.query.offset,10)||0,0),1000000);
+  const result=await tenantBackups.listTenantBackups(db,req.tenantId,{limit:25,offset});
+  result.modules=result.modules.filter(module=>!module.protected);
+  res.json(result);
+ }catch(error){next(error);}
+});
+r.post('/backups',async(req,res,next)=>{
+ if(!isAdministrator(req))return res.status(403).json({error:'Permission insuffisante.'});
+ try{
+  const backup=await tenantBackups.createTenantBackup({organizationId:req.tenantId,userId:req.user.id});
+  res.status(201).json({backup,message:'Sauvegarde de l’établissement enregistrée.'});
+ }catch(error){if(error.status)return res.status(error.status).json({error:error.message});next(error);}
+});
+r.post('/backups/:id/restore',async(req,res,next)=>{
+ if(!isAdministrator(req))return res.status(403).json({error:'Permission insuffisante.'});
+ if(!/^[1-9]\d*$/.test(req.params.id))return res.status(400).json({error:'Sauvegarde invalide.'});
+ try{
+  res.json(await tenantBackups.mergeTenantBackup({organizationId:req.tenantId,backupId:req.params.id,modules:req.body?.modules,confirmation:req.body?.confirmation,userId:req.user.id}));
+ }catch(error){if(error.status)return res.status(error.status).json({error:error.message});next(error);}
 });
 
 r.get('/backup',async(req,res,next)=>{

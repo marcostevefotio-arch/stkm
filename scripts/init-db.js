@@ -96,6 +96,8 @@ async function ensureForeignKey(table,column,referencedTable,referencedColumn,co
  await recordBuiltInMigration(db,'2026110702_merge_pharmacist_storekeeper');
  await verifyBuiltInMigrationSchema(db,'2026111201_database_logo_storage');
  await recordBuiltInMigration(db,'2026111201_database_logo_storage');
+ await verifyBuiltInMigrationSchema(db,'2026111301_tenant_backups');
+ await recordBuiltInMigration(db,'2026111301_tenant_backups');
  await db.execute(
   `INSERT IGNORE INTO account_email_claims(email,user_id)
    SELECT LOWER(email),MIN(id) FROM users GROUP BY LOWER(email)`

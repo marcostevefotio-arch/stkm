@@ -308,6 +308,44 @@ const migrations = [{
             await connection.execute(`ALTER TABLE \`organization_settings\` ADD COLUMN \`${step.column}\` ${definitions[step.column]}`);
         }
     }
+},{
+    id: '2026111301_tenant_backups',
+    description: 'Conserver les sauvegardes restaurables des clients en base avec un suivi des sauvegardes quotidiennes.',
+    definition: fs.readFileSync(path.join(__dirname, '../../database/schema.sql'), 'utf8').split(/;\s*(?:\r?\n|$)/).filter(value => /CREATE TABLE IF NOT EXISTS tenant_(backups|backup_status) \(/.test(value)).join(';\n'),
+    async inspect(connection) {
+        const [tables] = await connection.execute("SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('organizations','tenant_backups','tenant_backup_status')");
+        if (!tables.some(table => table.TABLE_NAME === 'organizations' && table.ENGINE === 'InnoDB')) return { ready:false,reason:'La table organizations doit exister avec le moteur InnoDB.',steps:[] };
+        const steps = [];
+        const expected = {
+            tenant_backups:{ id:'bigint unsigned',organization_id:'bigint unsigned',reason:"enum('daily','manual','before_reset','before_restore')",payload:'longblob',checksum:'char(64)',uncompressed_size:'bigint unsigned',row_count:'bigint unsigned',created_at:'timestamp',expires_at:'datetime' },
+            tenant_backup_status:{ organization_id:'bigint unsigned',last_success_at:'datetime',last_attempt_at:'datetime',last_error:'varchar(1000)' }
+        };
+        for (const [name,columns] of Object.entries(expected)) {
+            const existing = tables.find(table => table.TABLE_NAME === name);
+            if (!existing) { steps.push({ action:'create_table',table:name,description:`Créer ${name}.` }); continue; }
+            if (existing.ENGINE !== 'InnoDB') return { ready:false,reason:`La table ${name} doit utiliser InnoDB.`,steps:[] };
+            const [metadata] = await connection.execute('SELECT COLUMN_NAME,COLUMN_TYPE,COLUMN_KEY,IS_NULLABLE,EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?', [name]);
+            if (Object.entries(columns).some(([column,type]) => !metadata.some(row => row.COLUMN_NAME === column && String(row.COLUMN_TYPE).toLowerCase().replace(/\(\d+\)(?= unsigned)/g,'') === type))) return { ready:false,reason:`La table ${name} possède une définition incompatible.`,steps:[] };
+            const primary = name === 'tenant_backups' ? 'id' : 'organization_id';
+            if (metadata.filter(column => column.COLUMN_KEY === 'PRI').map(column => column.COLUMN_NAME).join(',') !== primary ||
+                (name === 'tenant_backups' && !metadata.find(column => column.COLUMN_NAME === 'id').EXTRA?.includes('auto_increment'))) {
+                return { ready:false,reason:`La clé primaire de ${name} est incompatible.`,steps:[] };
+            }
+            const nullable = name === 'tenant_backups' ? [] : ['last_success_at','last_attempt_at','last_error'];
+            if (metadata.some(column => Object.hasOwn(columns,column.COLUMN_NAME) && column.IS_NULLABLE !== (nullable.includes(column.COLUMN_NAME) ? 'YES' : 'NO'))) return { ready:false,reason:`La nullabilité de ${name} est incompatible.`,steps:[] };
+            const [foreignKeys] = await connection.execute("SELECT REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME='organization_id' AND REFERENCED_TABLE_NAME IS NOT NULL",[name]);
+            if (foreignKeys.length !== 1 || foreignKeys[0].REFERENCED_TABLE_NAME !== 'organizations' || foreignKeys[0].REFERENCED_COLUMN_NAME !== 'id') return { ready:false,reason:`La référence d’établissement de ${name} est incompatible.`,steps:[] };
+        }
+        return { ready:true,reason:null,steps };
+    },
+    async apply(connection,steps) {
+        const statements = this.definition.split(/;\s*(?:\r?\n|$)/);
+        for (const step of steps) {
+            const sql = statements.find(statement => statement.includes(`CREATE TABLE IF NOT EXISTS ${step.table} (`));
+            if (!sql || step.action !== 'create_table') throw new Error('Étape de sauvegarde client invalide.');
+            await connection.execute(sql);
+        }
+    }
 }].map(migration => ({
     ...migration,
     checksum: crypto.createHash('sha256')

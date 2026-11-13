@@ -508,3 +508,19 @@ CREATE TABLE IF NOT EXISTS tenant_traffic_daily (
  last_request_at TIMESTAMP NULL,
  PRIMARY KEY(organization_id,day), KEY idx_traffic_day(day)
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS tenant_backups (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, organization_id BIGINT UNSIGNED NOT NULL,
+ reason ENUM('daily','manual','before_reset','before_restore') NOT NULL,
+ payload LONGBLOB NOT NULL, checksum CHAR(64) NOT NULL, uncompressed_size BIGINT UNSIGNED NOT NULL,
+ row_count BIGINT UNSIGNED NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ expires_at DATETIME NOT NULL,
+ KEY idx_tenant_backups_date(organization_id,created_at),
+ KEY idx_tenant_backups_expiry(expires_at),
+ FOREIGN KEY(organization_id) REFERENCES organizations(id)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS tenant_backup_status (
+ organization_id BIGINT UNSIGNED PRIMARY KEY, last_success_at DATETIME NULL,
+ last_attempt_at DATETIME NULL, last_error VARCHAR(1000) NULL,
+ FOREIGN KEY(organization_id) REFERENCES organizations(id)
+) ENGINE=InnoDB;

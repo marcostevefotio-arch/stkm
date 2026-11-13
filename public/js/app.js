@@ -85,7 +85,7 @@
             if (settingsData.secondary_color) document.documentElement.style.setProperty('--accent', settingsData.secondary_color);
             updateTenantLogo(settingsData.logo_url);
             $('#plan').textContent = subscription ? subscription.plan_name + (subscription.target_plan_name ? ' → ' + subscription.target_plan_name : '') + ' · ' + subscription.status : 'Aucun abonnement';
-            $('#period').textContent = subscription ? 'Échéance : ' + new Date(subscription.current_period_end).toLocaleDateString('fr-FR') : '';
+            $('#period').textContent = subscription ? 'Échéance : ' + fmtDate(subscription.current_period_end) : '';
             $('#date').textContent = new Date().toLocaleDateString('fr-FR', { dateStyle: 'long' });
             const role = me.user.role;
             state.role = role; state.userId = Number(me.user.id);
@@ -1725,7 +1725,7 @@
             const logo = modal.querySelector('.receipt-identity img');
             if (logo) await logo.decode();
             const orientation = modal.querySelector('[data-print-orientation]').value === 'landscape' ? 'landscape' : 'portrait';
-            pageStyle.textContent = `@media print { @page { size: A4 ${orientation}; margin: 0 5mm 15mm; } }`;
+            pageStyle.textContent = `@media print { @page { size: A4 ${orientation}; margin: 10mm 10mm 15mm; } }`;
             document.head.append(pageStyle);
             document.body.classList.add('receipt-printing');
             window.addEventListener('afterprint', cleanup, { once: true });
@@ -2083,6 +2083,10 @@
                 } catch (reason) { error.textContent = reason instanceof SyntaxError ? 'Le fichier sélectionné ne contient pas un JSON valide.' : reason.message; }
                 finally { restoreButton.disabled = !backupFile; restoreButton.textContent = 'Fusionner la sauvegarde'; }
             };
+            const storedBackups = document.createElement('section');
+            storedBackups.className = 'panel';
+            panel.append(storedBackups);
+            await window.renderTenantBackups(storedBackups,{ request:api,basePath:'/api/settings/backups',organizationId:state.profile.organization_id });
             return;
         }
         if (activeTab === 'security') {
@@ -2241,7 +2245,7 @@
         overlay.querySelector('.close').onclick = close; overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
         return overlay;
     }
-    const fmtDate = value => value ? new Date(value).toLocaleDateString(window.i18n?.lang === 'en' ? 'en-GB' : 'fr-FR') : '—';
+    const fmtDate = value => value ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value).toLocaleDateString(window.i18n?.lang === 'en' ? 'en-GB' : 'fr-FR') : '—';
     function showProfile() {
         const user = state.profile || {};
         infoModal('Mon profil', `<dl class="profile-list"><dt>Nom</dt><dd>${esc(user.full_name)}</dd><dt>Courriel</dt><dd>${esc(user.email)}</dd><dt>Rôle</dt><dd>${esc(window.RedamsAccess.roleLabel(user) || user.role)}</dd><dt>Établissement</dt><dd>${esc(user.organization_name)}</dd></dl><p class="notification-empty">Pour changer votre mot de passe, ouvrez Paramètres › Sécurité & mot de passe.</p>`);
@@ -2249,10 +2253,14 @@
     async function showSubscription() {
         const overlay = infoModal('Mon abonnement', '<p class="notification-empty">Chargement…</p>'), box = overlay.querySelector('.modal');
         try {
-            const [sub, catalog] = await Promise.all([api('/api/subscription'), api('/api/public/catalog').catch(() => ({ plans: [] }))]);
+            const [sub, catalog, me] = await Promise.all([api('/api/subscription'), api('/api/public/catalog').catch(() => ({ plans: [] })), api('/api/auth/me')]);
+            state.profile = me.user; state.modules = parseModuleList(me.user.subscription_modules);
+            refreshAccess();
+            $('#plan').textContent = sub ? sub.plan_name + (sub.target_plan_name ? ' → ' + sub.target_plan_name : '') + ' · ' + sub.status : 'Aucun abonnement';
+            $('#period').textContent = sub ? 'Du ' + fmtDate(sub.current_period_start) + ' au ' + fmtDate(sub.current_period_end) : '';
             if (!sub) { box.insertAdjacentHTML('beforeend', '<p>Aucun abonnement actif.</p>'); box.querySelector('.notification-empty').remove(); return; }
             const plans = (catalog.plans || []).filter(plan => plan.name !== sub.plan_name);
-            box.innerHTML = `<button type="button" class="close" aria-label="Fermer">×</button><h3>Mon abonnement</h3><dl class="profile-list"><dt>Forfait</dt><dd>${esc(sub.plan_name)}${sub.target_plan_name ? ` (forfait choisi : ${esc(sub.target_plan_name)})` : ''}</dd><dt>Statut</dt><dd>${esc(sub.status)}</dd><dt>Échéance</dt><dd>${esc(fmtDate(sub.current_period_end))}</dd><dt>Utilisateurs maximum</dt><dd>${esc(sub.max_users ?? '—')}</dd></dl>${plans.length ? `<h4>Changer de forfait</h4><form id="upgrade-form" class="upgrade-form"><label>Forfait souhaité<select name="plan">${plans.map(plan => `<option value="${esc(plan.name)}">${esc(plan.name)} — ${formatMoney(plan.monthly_price)}/mois</option>`).join('')}</select></label><p class="error" role="alert"></p><button class="btn">Demander un upgrade</button></form>` : ''}`;
+            box.innerHTML = `<button type="button" class="close" aria-label="Fermer">×</button><h3>Mon abonnement</h3><dl class="profile-list"><dt>Forfait</dt><dd>${esc(sub.plan_name)}${sub.target_plan_name ? ` (forfait choisi : ${esc(sub.target_plan_name)})` : ''}</dd><dt>Statut</dt><dd>${esc({ active:'Actif',trialing:'Essai',past_due:'Impayé',suspended:'Suspendu',cancelled:'Annulé' }[sub.status] || sub.status)}</dd><dt>Date d’abonnement</dt><dd>${esc(fmtDate(sub.current_period_start))}</dd><dt>Date de fin</dt><dd>${esc(fmtDate(sub.current_period_end))}</dd><dt>Utilisateurs maximum</dt><dd>${esc(sub.max_users ?? '—')}</dd></dl>${plans.length ? `<h4>Changer de forfait</h4><form id="upgrade-form" class="upgrade-form"><label>Forfait souhaité<select name="plan">${plans.map(plan => `<option value="${esc(plan.name)}">${esc(plan.name)} — ${formatMoney(plan.monthly_price)}/mois</option>`).join('')}</select></label><p class="error" role="alert"></p><button class="btn">Demander un upgrade</button></form>` : ''}`;
             box.querySelector('.close').onclick = () => overlay.remove();
             const form = box.querySelector('#upgrade-form');
             if (form) form.onsubmit = async event => { event.preventDefault(); const error = form.querySelector('.error'); error.textContent = ''; try { await api('/api/support', { method: 'POST', body: JSON.stringify({ subject: `Demande de changement de forfait : ${form.elements.plan.value}`, message: `Je souhaite passer du forfait ${sub.plan_name} au forfait ${form.elements.plan.value}.` }) }); overlay.remove(); toast('Demande envoyée à l’assistance.'); } catch (reason) { error.textContent = reason.message; } };
@@ -2262,7 +2270,13 @@
         const overlay = infoModal('Facturation', '<p class="notification-empty">Chargement…</p>'), box = overlay.querySelector('.modal');
         try {
             const data = await api('/api/subscription/invoices'), rows = Array.isArray(data) ? data : data.invoices || [];
-            box.querySelector('.notification-empty').outerHTML = rows.length ? `<div class="table-scroll"><table><thead><tr><th>Facture</th><th>Période</th><th>Montant</th><th>Statut</th><th>Échéance</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.invoice_number)}</td><td>${esc(fmtDate(row.period_start))} → ${esc(fmtDate(row.period_end))}</td><td>${esc(Number(row.total_amount).toLocaleString('fr-FR'))} ${esc(row.currency || '')}</td><td>${esc(row.status)}</td><td>${esc(fmtDate(row.due_date))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="notification-empty">Aucune facture.</p>';
+            box.querySelector('.notification-empty').outerHTML = rows.length ? `<div class="table-scroll"><table><thead><tr><th>Facture</th><th>Période</th><th>Montant</th><th>Statut</th><th>Échéance</th><th>Reçu</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.invoice_number)}</td><td>${esc(fmtDate(row.period_start))} → ${esc(fmtDate(row.period_end))}</td><td>${esc(Number(row.total_amount).toLocaleString('fr-FR'))} ${esc(row.currency || '')}</td><td>${esc(row.status)}</td><td>${esc(fmtDate(row.due_date))}</td><td>${row.status === 'paid' && Number(row.has_receipt) ? `<button class="btn" type="button" data-subscription-receipt="${esc(row.id)}">Voir / imprimer</button>` : '—'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="notification-empty">Aucune facture.</p>';
+            box.querySelectorAll('[data-subscription-receipt]').forEach(button => button.onclick = async () => {
+                button.disabled = true;
+                try { window.showSubscriptionReceipt(await api(`/api/subscription/invoices/${button.dataset.subscriptionReceipt}/receipt`)); }
+                catch (error) { toast(error.message); }
+                finally { button.disabled = false; }
+            });
         } catch (error) { box.querySelector('.notification-empty').outerHTML = `<p class="error">${esc(error.message)}</p>`; }
     }
     $('#alerts-button').onclick = () => setAlertsOpen($('#alerts-panel').hidden);

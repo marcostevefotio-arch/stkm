@@ -27,6 +27,38 @@ test('sales tax settings reject rates outside 0-100 before database access',asyn
  assert.equal(calls,0);
 });
 
+test('stored backup listings are tenant-scoped and hide protected restore modules from client admins',async(t)=>{
+ const originalExecute=db.execute;
+ db.execute=async(sql,values)=>{
+  assert.equal(values[0],42);
+  if(sql.startsWith('SELECT COUNT'))return [[{total:1}],[]];
+  if(sql.startsWith('SELECT last_success'))return [[{last_success_at:'2026-11-13 12:00:00'}],[]];
+  assert.doesNotMatch(sql,/SELECT.*payload/);
+  return [[{id:71,reason:'before_reset',row_count:12}],[]];
+ };
+ t.after(()=>{db.execute=originalExecute;});
+ const url=await listen(t);
+ const response=await fetch(`${url}/backups`);
+ assert.equal(response.status,200);
+ const data=await response.json();
+ assert.equal(data.retention_days,365);assert.equal(data.items[0].id,71);
+ assert.equal(data.modules.some(module=>module.protected),false);
+ assert.ok(data.modules.some(module=>module.key==='sales'));
+});
+
+test('client backup restore denies protected modules and non-admin roles before database access',async(t)=>{
+ const originalExecute=db.execute,originalGetConnection=db.getConnection;
+ db.execute=async()=>assert.fail('Database should not be queried');
+ db.getConnection=async()=>assert.fail('Database connection should not be acquired');
+ t.after(()=>{db.execute=originalExecute;db.getConnection=originalGetConnection;});
+ const adminUrl=await listen(t);
+ const response=await fetch(`${adminUrl}/backups/71/restore`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({modules:['subscription'],confirmation:'RESTAURER 42',staffId:1,organizationId:1})});
+ assert.equal(response.status,403);
+ const viewerUrl=await listen(t,'CASHIER');
+ for(const [method,path] of [['GET','/backups'],['POST','/backups'],['POST','/backups/71/restore']]){
+  assert.equal((await fetch(`${viewerUrl}${path}`,{method})).status,403);
+ }
+});
 test('company profile validates and saves the separate organization fields',async(t)=>{
  const originalExecute=db.execute,queries=[];
  db.execute=async(sql,values)=>{queries.push({sql,values});return [{affectedRows:1},[]];};

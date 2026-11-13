@@ -80,7 +80,7 @@ test('receipt printing applies the chosen orientation and exact margins, then re
   vm.runInContext(source.slice(source.indexOf('    async function printReceipt('),source.indexOf('    function addReceiptIdentity(')),context);
   await context.printReceipt({querySelector:selector=>selector==='[data-print-orientation]'?{value:orientation}:null});
   assert.equal(printed,1);
-  assert.equal(styles[0].textContent,`@media print { @page { size: A4 ${orientation}; margin: 0 5mm 15mm; } }`);
+  assert.equal(styles[0].textContent,`@media print { @page { size: A4 ${orientation}; margin: 10mm 10mm 15mm; } }`);
   assert.ok(classes.has('receipt-printing'));
   listeners.afterprint();
   assert.ok(styles[0].removed);

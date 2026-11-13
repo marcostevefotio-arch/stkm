@@ -16,6 +16,7 @@ function fakeConnection({ history = [], events = [] } = {}) {
             if (sql.includes("TABLE_NAME IN ('accounting_books','users','accounting_review_snapshots')")) return [[{ TABLE_NAME: 'users', ENGINE: 'InnoDB' }, { TABLE_NAME: 'accounting_books', ENGINE: 'InnoDB' }], []];
             if (sql.includes("TABLE_NAME IN ('organization_settings','sales_invoices')")) return [[{ TABLE_NAME: 'organization_settings', ENGINE: 'InnoDB' }, { TABLE_NAME: 'sales_invoices', ENGINE: 'InnoDB' }], []];
             if (sql.includes("TABLE_NAME='organization_settings'") && sql.includes('SELECT TABLE_NAME')) return [[{ TABLE_NAME: 'organization_settings', ENGINE: 'InnoDB' }], []];
+            if (sql.includes("TABLE_NAME IN ('organizations','tenant_backups','tenant_backup_status')")) return [[{ TABLE_NAME:'organizations',ENGINE:'InnoDB' }],[]];
             if (sql.includes("COLUMN_NAME='separate_sale_payment'")) return [[], []];
             if (sql.includes('SELECT TABLE_NAME')) return [[{ TABLE_NAME: 'plans' }, { TABLE_NAME: 'platform_promotions' }, { TABLE_NAME: 'products' }, { TABLE_NAME: 'sales_invoice_items' }], []];
             if (sql.includes("TABLE_NAME='users' AND COLUMN_NAME='role'")) return [[{ COLUMN_TYPE: "enum('OWNER','ADMIN','PHARMACIST','STOREKEEPER','CASHIER','VIEWER','SUPER_ADMIN')", IS_NULLABLE: 'NO', COLUMN_DEFAULT: 'VIEWER' }], []];
@@ -35,7 +36,7 @@ function fakeConnection({ history = [], events = [] } = {}) {
 test('database migration status previews additive changes without applying them', async () => {
     const connection = fakeConnection();
     const status = await getStatus(connection);
-    assert.equal(status.items.length, 9);
+    assert.equal(status.items.length, 10);
     assert.equal(status.items[0].status, 'pending');
     assert.deepEqual(status.items[0].steps.map(step => step.action), ['add_column', 'add_foreign_key']);
     assert.equal(connection.events.some(sql => sql.startsWith('ALTER TABLE')), false);
@@ -56,6 +57,19 @@ test('database logo migration adds nullable MIME and binary columns after backup
     assert.ok(ddl.every(sql => connection.events.indexOf(sql) > connection.events.indexOf('BACKUP_VERIFIED')));
 });
 
+test('tenant backup migration creates durable storage and scheduler status only after SQL backup', async () => {
+    const connection = fakeConnection();
+    const migration = (await getStatus(connection)).items.find(item => item.id === '2026111301_tenant_backups');
+    assert.equal(migration.status,'pending'); assert.equal(migration.steps.length,2);
+    await runMigration({ migrationId:migration.id,staffId:1,reviewed:true,
+        connectionPool:{ getConnection:async () => connection },
+        backup:async () => { connection.events.push('BACKUP_VERIFIED'); return { filename:'backup.sql',size:12 }; }
+    });
+    for (const name of ['tenant_backups','tenant_backup_status']) {
+        const sql = connection.events.find(event => typeof event === 'string' && event.includes(`CREATE TABLE IF NOT EXISTS ${name} (`));
+        assert.ok(sql); assert.ok(connection.events.indexOf(sql) > connection.events.indexOf('BACKUP_VERIFIED'));
+    }
+});
 test('database backup retries without the unsupported GTID option', async t => {
     const targetDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'redams-mysqldump-'));
     const originalEnv = Object.fromEntries(['DB_HOST', 'DB_USER', 'DB_NAME', 'DB_PASSWORD', 'DB_PORT'].map(key => [key, process.env[key]]));

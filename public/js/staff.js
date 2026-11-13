@@ -4,7 +4,7 @@
     const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
     const state = { staff: null, permissions: {}, page: 'dashboard' };
     const money = (value, currency) => `${Number(value || 0).toLocaleString('fr-FR')} ${esc(currency || '')}`.trim();
-    const date = value => (value ? new Date(value).toLocaleDateString('fr-FR') : '—');
+    const date = value => (value ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value).toLocaleDateString('fr-FR') : '—');
     const dateTime = value => (value ? new Date(value).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
     const day = value => (value ? String(value).slice(0, 10) : '');
     const DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
@@ -142,9 +142,10 @@
                 path: '/invoices', columns: ['Facture', 'Client', 'Période', 'Montant', 'Échéance', 'Statut'],
                 toolbar: '<select data-filter="status" aria-label="Statut"><option value="">Tous les statuts</option><option value="draft">Brouillons</option><option value="sent">Envoyées</option><option value="paid">Payées</option><option value="void">Annulées</option></select>',
                 action: state.permissions.invoices ? '<button class="sp-btn" data-new>＋ Nouvelle facture</button>' : '',
-                row: i => `<tr data-id="${esc(i.id)}"><td><b>${esc(i.invoice_number)}</b></td><td>${esc(i.organization_name)}</td><td>${date(i.period_start)} → ${date(i.period_end)}</td><td>${money(i.total_amount, i.currency)}${Number(i.discount_amount) ? `<small>remise ${money(i.discount_amount)}</small>` : ''}</td><td>${date(i.due_date)}</td><td>${tag(i.status)}${state.permissions.invoices && !['paid', 'void'].includes(i.status) ? ` <select data-invoice="${esc(i.id)}" aria-label="Changer le statut"><option value="">Changer…</option>${['draft', 'sent', 'paid', 'void'].filter(s => s !== i.status).map(s => `<option value="${s}">${esc(labels[s][0])}</option>`).join('')}</select>` : ''}</td></tr>`,
+                row: i => `<tr data-id="${esc(i.id)}"><td><b>${esc(i.invoice_number)}</b>${i.status === 'paid' && Number(i.has_receipt) ? ` <button class="sp-btn small" data-receipt="${esc(i.id)}">Reçu</button>` : ''}</td><td>${esc(i.organization_name)}</td><td>${date(i.period_start)} → ${date(i.period_end)}</td><td>${money(i.total_amount, i.currency)}${Number(i.discount_amount) ? `<small>remise ${money(i.discount_amount)}</small>` : ''}</td><td>${date(i.due_date)}</td><td>${tag(i.status)}${state.permissions.invoices && !['paid', 'void'].includes(i.status) ? ` <select data-invoice="${esc(i.id)}" aria-label="Changer le statut"><option value="">Changer…</option>${['draft', 'sent', 'paid', 'void'].filter(s => s !== i.status).map(s => `<option value="${s}">${esc(labels[s][0])}</option>`).join('')}</select>` : ''}</td></tr>`,
                 bind(rootEl, load) {
                     rootEl.querySelector('[data-new]')?.addEventListener('click', () => invoiceForm(load));
+                    rootEl.addEventListener('click', event => { const button = event.target.closest('[data-receipt]'); if (button) run(button, () => openSubscriptionReceipt(button.dataset.receipt)); });
                     rootEl.addEventListener('change', async event => { const select = event.target.closest('[data-invoice]'); if (!select || !select.value) return; try { await send('PATCH', `/invoices/${select.dataset.invoice}/status`, { status: select.value }); toast('Statut mis à jour.'); load(); } catch (error) { toast(error.message, true); load(); } });
                 }
             });
@@ -675,10 +676,70 @@
             m.body.innerHTML = `<dl class="sp-kv"><dt>Nom</dt><dd>${esc(o.name)} ${tag(o.status)}</dd><dt>Contact</dt><dd>${esc(o.email || '—')} · ${esc(o.phone || '—')}</dd><dt>Inscrit le</dt><dd>${date(o.created_at)}</dd><dt>Utilisateurs actifs</dt><dd>${esc(data.active_users)}${s?.max_users ? ` / ${esc(s.max_users)}` : ''}</dd><dt>Responsables</dt><dd>${data.contacts.map(c => `${esc(c.full_name)} (${esc(c.email)})`).join('<br>') || '—'}</dd></dl>
             <div class="sp-panel"><h3>Abonnement</h3>${can ? `<form id="sub-form"><div class="sp-grid2"><label>Forfait<select name="plan_id">${(s && !plans.items.some(p => Number(p.id) === Number(s.plan_id)) ? [{ id: s.plan_id, name: `${s.plan_name} (inactif)` }, ...plans.items] : plans.items).map(p => `<option value="${esc(p.id)}" ${s && Number(s.plan_id) === Number(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label><label>Statut<select name="status">${['trialing', 'active', 'past_due', 'suspended', 'cancelled'].map(v => `<option value="${v}" ${s?.status === v ? 'selected' : ''}>${esc(labels[v][0])}</option>`).join('')}</select></label><label>Début de période<input type="date" name="period_start" value="${esc(s?.current_period_start || day(new Date().toISOString()))}"></label><label>Fin de période<input type="date" name="period_end" value="${esc(s?.current_period_end || '')}" required></label></div><p class="sp-error"></p><button class="sp-btn">Enregistrer l’abonnement</button></form>` : `<p>${s ? `${esc(s.plan_name)}${s.target_plan_name ? ` → ${esc(s.target_plan_name)}` : ''} ${tag(s.status)} jusqu’au ${esc(s.current_period_end)}` : 'Aucun abonnement.'}</p>`}</div>
             ${can ? `<div class="sp-actions">${['active', 'suspended', 'closed'].filter(v => v !== o.status).map(v => `<button class="sp-btn ${v === 'active' ? '' : 'danger'} small" data-status="${v}">${v === 'active' ? 'Réactiver le compte' : v === 'suspended' ? 'Suspendre le compte' : 'Fermer le compte'}</button>`).join('')}</div>` : ''}
-            <div class="sp-panel"><h3>Dernières activités</h3><p><b>Tickets :</b> ${data.tickets.map(t => `#${esc(t.id)} ${esc(t.subject)} ${tag(t.status)}`).join(' · ') || '—'}</p><p><b>Réclamations :</b> ${data.claims.map(c => `${esc(c.reference)} ${tag(c.status)}`).join(' · ') || '—'}</p><p><b>Factures :</b> ${data.invoices.map(i => `${esc(i.invoice_number)} ${tag(i.status)}`).join(' · ') || '—'}</p></div>`;
+            ${state.staff.role === 'PLATFORM_ADMIN' ? `<div class="sp-actions"><button class="sp-btn" data-cash-subscription>Activer un abonnement payé en espèces</button><button class="sp-btn" data-tenant-backups>Sauvegardes et restauration</button>${s?.status === 'trialing' ? '<button class="sp-btn danger" data-trial-reset>Réinitialiser les données d’essai</button>' : ''}</div>` : ''}
+            <div class="sp-panel"><h3>Dernières activités</h3><p><b>Tickets :</b> ${data.tickets.map(t => `#${esc(t.id)} ${esc(t.subject)} ${tag(t.status)}`).join(' · ') || '—'}</p><p><b>Réclamations :</b> ${data.claims.map(c => `${esc(c.reference)} ${tag(c.status)}`).join(' · ') || '—'}</p><p><b>Factures :</b> ${data.invoices.map(i => `${esc(i.invoice_number)} ${tag(i.status)}${i.status === 'paid' && Number(i.has_receipt) ? ` <button class="sp-btn small" data-receipt="${esc(i.id)}">Reçu</button>` : ''}`).join(' · ') || '—'}</p></div>`;
+            m.body.querySelector('[data-cash-subscription]')?.addEventListener('click', () => { m.close(); cashSubscriptionForm(id, data, plans, reload); });
+            m.body.querySelector('[data-tenant-backups]')?.addEventListener('click', () => {
+                m.close();
+                const backups = modal(`Sauvegardes · ${o.name}`, '<p class="sp-muted">Chargement…</p>');
+                window.renderTenantBackups(backups.body,{ request:api,basePath:`/clients/${id}/backups`,organizationId:id,superadmin:true });
+            });
+            m.body.querySelector('[data-trial-reset]')?.addEventListener('click', () => { m.close(); trialResetForm(id, o.name, reload); });
+            m.body.querySelectorAll('[data-receipt]').forEach(button => button.onclick = () => run(button, () => openSubscriptionReceipt(button.dataset.receipt)));
             const form = m.body.querySelector('#sub-form');
             if (form) form.onsubmit = event => { event.preventDefault(); run(form.querySelector('button'), async () => { await send('PATCH', `/clients/${id}/subscription`, Object.fromEntries(new FormData(form))); toast('Abonnement mis à jour.'); m.close(); reload(); }, form.querySelector('.sp-error')); };
             m.body.querySelectorAll('[data-status]').forEach(button => button.onclick = () => { if (confirm('Confirmer le changement de statut du compte ?')) run(button, async () => { await send('PATCH', `/clients/${id}/status`, { status: button.dataset.status }); toast('Statut mis à jour.'); m.close(); reload(); }); });
+        } catch (error) { m.body.innerHTML = `<p class="sp-error">${esc(error.message)}</p>`; }
+    }
+
+    async function openSubscriptionReceipt(id) {
+        window.showSubscriptionReceipt(await api(`/invoices/${id}/receipt`));
+    }
+
+    function cashSubscriptionForm(id, data, plans, reload) {
+        const paidPlans = plans.items.filter(plan => plan.is_active && plan.plan_type !== 'trial'), moduleLabels = plans.modules || {};
+        const today = day(new Date().toISOString()), s = data.subscription;
+        const m = modal('Abonnement payé en espèces', `<p><b>${esc(data.organization.name)}</b> — un nouveau reçu payé sera créé. L’abonnement précédent sera remplacé ; ne soumettez ce formulaire qu’après réception des espèces.</p><form><label>Forfait<select name="plan_id" required>${paidPlans.map(plan => `<option value="${esc(plan.id)}" ${Number(s?.target_plan_id || s?.plan_id) === Number(plan.id) ? 'selected' : ''}>${esc(plan.name)} (${esc(plan.currency)})</option>`).join('')}</select></label><div class="sp-grid2"><label>Périodicité<select name="billing_interval"><option value="monthly">Mensuel</option><option value="annual">Annuel</option><option value="biennial">Deux ans</option></select></label><label>Utilisateurs maximum<input type="number" name="max_users" min="${Math.max(1, data.active_users)}" max="10000" value="${Math.max(1, data.active_users, Number(s?.max_users || 1))}" required></label><label>Date d’abonnement<input type="date" name="period_start" value="${today}" required></label><label>Date de fin<input type="date" name="period_end" required></label><label>Montant reçu (<span data-currency></span>)<input type="number" name="amount" min="0.01" max="999999999" step="0.01" required></label></div><fieldset data-modules hidden><legend>Modules du forfait personnalisé</legend></fieldset><label class="sp-checkbox"><input type="checkbox" name="confirm" required>Je confirme avoir reçu le paiement en espèces.</label><p class="sp-error" role="alert"></p><button class="sp-btn" ${paidPlans.length ? '' : 'disabled'}>Enregistrer le paiement et activer</button></form>`);
+        const form = m.body.querySelector('form'), field = form.querySelector('[data-modules]');
+        const updatePlan = () => {
+            const plan = paidPlans.find(item => Number(item.id) === Number(form.elements.plan_id.value));
+            form.querySelector('[data-currency]').textContent = plan?.currency || '';
+            field.hidden = plan?.plan_type !== 'customized';
+            let modules = plan?.included_modules || [];
+            if (typeof modules === 'string') modules = JSON.parse(modules);
+            field.innerHTML = `<legend>Modules du forfait personnalisé</legend>${modules.map(key => `<label class="sp-checkbox"><input type="checkbox" name="selected_modules" value="${esc(key)}" checked>${esc(moduleLabels[key] || key)}</label>`).join('')}`;
+        };
+        form.elements.plan_id.onchange = () => { try { updatePlan(); } catch (error) { form.querySelector('.sp-error').textContent = error.message; } };
+        try { updatePlan(); } catch (error) { form.querySelector('.sp-error').textContent = error.message; form.querySelector('button').disabled = true; }
+        form.onsubmit = event => {
+            event.preventDefault();
+            run(form.querySelector('button'), async () => {
+                const body = Object.fromEntries(new FormData(form));
+                body.confirm = form.elements.confirm.checked;
+                body.selected_modules = [...field.querySelectorAll('input:checked')].map(input => input.value);
+                const result = await send('POST', `/clients/${id}/subscription/cash`, body);
+                m.close(); toast(result.message); reload();
+                await run(null, () => openSubscriptionReceipt(result.invoice_id));
+            }, form.querySelector('.sp-error'));
+        };
+    }
+
+    async function trialResetForm(id, name, reload) {
+        const m = modal('Réinitialiser les données d’essai', '<p class="sp-muted">Chargement…</p>');
+        try {
+            const preview = await api(`/clients/${id}/trial-reset`);
+            if (!preview.eligible) throw Error('Ce client n’est plus en période d’essai.');
+            m.body.innerHTML = `<p><b>${esc(name)}</b> : suppression complète des données des modules cochés. Tous sont cochés par défaut ; décochez ceux à conserver. Faites arrêter toute saisie du client avant de continuer. Une sauvegarde restaurable de l’établissement sera créée automatiquement.</p><form><fieldset><legend>Modules à réinitialiser</legend>${preview.modules.map(module => `<div class="sp-reset-module"><label class="sp-checkbox"><input type="checkbox" name="modules" value="${esc(module.key)}" checked>${esc(module.label)}</label>${module.dependencies.length ? `<small class="sp-muted">a des reference de ${module.dependencies.map(key => esc(preview.modules.find(parent => parent.key === key).label)).join(', ')}</small>` : ''}</div>`).join('')}</fieldset><p>Si un module conservé référence des données à supprimer, l’opération sera refusée : aucun autre module ne sera ajouté automatiquement. Les quantités et mouvements de stock conservés ne sont pas annulés lors de la suppression des ventes ou achats.</p><p>Utilisateurs, paramètres, logos, abonnements, audits et comptabilité sont conservés. Les utilisateurs devront se reconnecter. La sauvegarde peut être fusionnée depuis les sauvegardes du client.</p><label>Pour confirmer, saisissez REINITIALISER ${esc(id)}<input name="confirmation" autocomplete="off" required></label><p class="sp-error" role="alert"></p><button class="sp-btn danger">Sauvegarder puis réinitialiser</button></form>`;
+            const form = m.body.querySelector('form');
+            form.onsubmit = event => {
+                event.preventDefault();
+                return run(form.querySelector('button'), async () => {
+                    const modules = [...form.querySelectorAll('input[name="modules"]:checked')].map(input => input.value);
+                    if (!modules.length) throw Error('Sélectionnez au moins un module.');
+                    const result = await send('POST', `/clients/${id}/trial-reset`, { modules,confirmation:form.elements.confirmation.value });
+                    m.close(); toast(result.message); reload();
+                }, form.querySelector('.sp-error'));
+            };
         } catch (error) { m.body.innerHTML = `<p class="sp-error">${esc(error.message)}</p>`; }
     }
 

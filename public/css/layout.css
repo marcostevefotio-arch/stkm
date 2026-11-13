@@ -261,6 +261,7 @@ body,button,input,select,textarea{font-family:"Lato",Poppins,sans-serif}
 .backup-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:center;gap:12px;margin:18px 0}
 .backup-file-label{margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:7px;background:#f8fbf9;color:var(--primary)}
 .backup-file-label input{margin-top:7px;font-size:10px}
+.tenant-backups .sp-checkbox{display:flex;flex-direction:row;align-items:center;gap:7px;margin:10px 0}.tenant-backups .sp-checkbox input{width:auto}
 .index-status{display:grid;grid-template-columns:1fr auto;gap:6px 12px;padding:12px 0;border-top:1px solid var(--line);font-size:11px}
 .index-status>small{grid-column:1/-1;color:var(--muted)}
 .support-faq{display:grid;gap:8px;margin:16px 0}

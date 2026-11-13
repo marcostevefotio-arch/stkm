@@ -12,6 +12,8 @@ body{margin:0;background:var(--sp-bg);color:var(--sp-ink);font:14px Lato,Arial,s
 .sp-login-card .sp-brand{margin-bottom:18px}.sp-login-card .sp-brand strong{color:var(--sp-primary)}
 .sp-login-card h1{font:800 22px Montserrat;margin:0 0 4px}
 label{display:flex;flex-direction:column;gap:5px;font-weight:700;font-size:12px;margin-bottom:12px}
+.sp-checkbox{flex-direction:row;align-items:center}.sp-checkbox input{width:auto}
+.sp-reset-module{margin:12px 0}.sp-reset-module .sp-checkbox{margin-bottom:3px}.sp-reset-module small{display:block;margin-left:22px}
 input,select,textarea{width:100%;padding:9px 10px;border:1px solid #cfd8e1;border-radius:7px;font:inherit;background:#fff}
 input:focus,select:focus,textarea:focus{outline:2px solid #0f3d5e33;border-color:var(--sp-primary)}
 .sp-btn{background:var(--sp-primary);color:#fff;border:0;padding:10px 16px;border-radius:8px;font:700 13px Lato;cursor:pointer}
